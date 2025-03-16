@@ -1,6 +1,6 @@
 import argparse
 from pathlib import Path
-
+import json
 import numpy as np
 from pytorch_lightning import Trainer, seed_everything
 
@@ -200,52 +200,62 @@ def compute_predictions(model, trainer, predict_dataloader):
     metrics = {k: np.asarray([m[k] for m in metrics]) for k in metrics[0]}
     return metrics, dataset, preds, piece
 
+def load_args_from_json(json_file):
+    """Load arguments from a JSON file."""
+    with open(json_file, "r") as f:
+        data = json.load(f)
+        #return json.load(f)
+    class Args:
+        def __init__(self, **entries):
+            self.__dict__.update(entries)
+
+    return Args(**data)
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Computes predictions for a given model and dataset, "
-        "prints metrics, and optionally dumps predictions to a given file."
-    )
-    parser.add_argument(
-        "--models",
-        type=str,
-        nargs="+",
-        required=True,
-        help="Local checkpoint files to use",
-    )
-    parser.add_argument(
-        "--datasplit",
-        type=str,
-        choices=("train", "val", "test"),
-        default="val",
-        help="data split to use: train, val or test " "(default: %(default)s)",
-    )
-    parser.add_argument("--gpu", type=int, default=0)
-    parser.add_argument(
-        "--num_workers", type=int, default=8, help="number of data loading workers "
-    )
-    parser.add_argument(
-        "--eval_trim_beats",
-        metavar="SECONDS",
-        type=float,
-        default=None,
-        help="Override whether to skip the first given seconds "
-        "per piece in evaluating (default: as stored in model)",
-    )
-    parser.add_argument(
-        "--dbn",
-        default=None,
-        action=argparse.BooleanOptionalAction,
-        help="override the option to use madmom postprocessing dbn",
-    )
-    parser.add_argument(
-        "--aggregation-type",
-        type=str,
-        choices=("mean-std", "k-fold"),
-        default="mean-std",
-        help="Type of aggregation to use for multiple models; ignored if only one model is given",
-    )
-
-    args = parser.parse_args()
+    # parser = argparse.ArgumentParser(
+    #     description="Computes predictions for a given model and dataset, "
+    #     "prints metrics, and optionally dumps predictions to a given file."
+    # )
+    # parser.add_argument(
+    #     "--models",
+    #     type=str,
+    #     nargs="+",
+    #     required=True,
+    #     help="Local checkpoint files to use",
+    # )
+    # parser.add_argument(
+    #     "--datasplit",
+    #     type=str,
+    #     choices=("train", "val", "test"),
+    #     default="val",
+    #     help="data split to use: train, val or test " "(default: %(default)s)",
+    # )
+    # parser.add_argument("--gpu", type=int, default=0)
+    # parser.add_argument(
+    #     "--num_workers", type=int, default=8, help="number of data loading workers "
+    # )
+    # parser.add_argument(
+    #     "--eval_trim_beats",
+    #     metavar="SECONDS",
+    #     type=float,
+    #     default=None,
+    #     help="Override whether to skip the first given seconds "
+    #     "per piece in evaluating (default: as stored in model)",
+    # )
+    # parser.add_argument(
+    #     "--dbn",
+    #     default=None,
+    #     action=argparse.BooleanOptionalAction,
+    #     help="override the option to use madmom postprocessing dbn",
+    # )
+    # parser.add_argument(
+    #     "--aggregation-type",
+    #     type=str,
+    #     choices=("mean-std", "k-fold"),
+    #     default="mean-std",
+    #     help="Type of aggregation to use for multiple models; ignored if only one model is given",
+    # )
+    args =  load_args_from_json("helpers/evaluate_params.json")
+    #args = parser.parse_args()
 
     main(args)

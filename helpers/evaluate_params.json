@@ -1,0 +1,9 @@
+{
+  "models": ["final0"],
+  "datasplit": "test", 
+  "num_workers": 8,
+  "eval_trim_beats": null,
+  "dbn": null,
+  "aggregation-type" : null,
+  "gpu": -1
+}
