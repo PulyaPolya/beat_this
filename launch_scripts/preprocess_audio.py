@@ -12,7 +12,9 @@ import torch
 import torchaudio
 from pedalboard import Pedalboard, PitchShift, time_stretch
 from tqdm import tqdm
-
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from beat_this.dataset.augment import precomputed_augmentation_filenames
 from beat_this.preprocessing import LogMelSpect, load_audio
 
@@ -58,10 +60,10 @@ class SpectCreation:
         """
         super(SpectCreation, self).__init__()
         # define the directories
-        self.audio_dir = BASEPATH / "data" / "audio"
+        self.audio_dir = BASEPATH / "audio"
         self.mono_tracks_dir = self.audio_dir / "mono_tracks"
         self.spectrograms_dir = self.audio_dir / "spectrograms"
-        self.annotations_dir = BASEPATH / "data" / "annotations"
+        self.annotations_dir = BASEPATH /  "annotations"
 
         if verbose:
             print("Audio dir: ", self.audio_dir.absolute())
@@ -128,11 +130,11 @@ class SpectCreation:
             metadata (list): A list containing the metadata of the created spectrogram.
         """
         for filename in self.filenames:
-            if not (self.annotations_dir / beat_path).exists():
-                print(
-                    f"beat annotation {beat_path} not found for {preprocessed_audio_folder}"
-                )
-                return
+            # if not (self.annotations_dir / beat_path).exists():
+            #     print(
+            #         f"beat annotation {beat_path} not found for {preprocessed_audio_folder}"
+            #     )
+            #     return
             audio_path = preprocessed_audio_folder / filename
             spect_path = (
                 self.spectrograms_dir
@@ -183,20 +185,20 @@ class AudioPreprocessing(object):
             verbose (bool, optional): Whether to print verbose information. Defaults to False.
         """
         super(AudioPreprocessing, self).__init__()
-        self.audio_dir = BASEPATH / "data" / "audio"
-        self.annotation_dir = BASEPATH / "data" / "annotations"
+        self.audio_dir = BASEPATH / "audio"
+        #self.annotation_dir = BASEPATH / "data" / "annotations"
         # load data_dir from audio_path.csv which has the format: dataset_name, audio_path
         self.audio_dirs = {
             row[0]: row[1] for row in pd.read_csv(orig_audio_paths, header=None).values
         }
-        # check if annotations exists, otherwise tell how to obtain them
-        if not self.annotation_dir.exists():
-            raise RuntimeError(
-                f"{self.annotation_dir} missing, check instructions "
-                "in README.md how to obtain the annotations."
-            )
+        # # check if annotations exists, otherwise tell how to obtain them
+        # if not self.annotation_dir.exists():
+        #     raise RuntimeError(
+        #         f"{self.annotation_dir} missing, check instructions "
+        #         "in README.md how to obtain the annotations."
+        #     )
 
-        print(f"Annotations ready in {self.annotation_dir}")
+        #print(f"Annotations ready in {self.annotation_dir}")
 
         self.out_sr = out_sr
         self.aug_sr = aug_sr
@@ -218,6 +220,7 @@ class AudioPreprocessing(object):
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = []
             for dataset_name, audio_dir in self.audio_dirs.items():
+                audio_dir = 'C:\\Polina\\master\\thesis\\beat_this\\data\\gtzan_old\\audio'
                 for audio_path in Path(audio_dir).iterdir():
                     if audio_path.stem[:12] in ("gtzan_speech", "gtzan_music_"):
                         continue
@@ -234,14 +237,14 @@ class AudioPreprocessing(object):
         print("Processed", processed, "audio files")
 
     def process_audio_file(self, dataset_name, audio_path):
-        annotation_dir = Path(self.annotation_dir, dataset_name, "annotations")
-        # load annotations
-        beat_path = Path(annotation_dir, "beats", audio_path.stem + ".beats")
-        if not beat_path.exists():
-            print(
-                f"beat annotation {beat_path} not found for {audio_path}",
-            )
-            return False
+        # annotation_dir = Path(self.annotation_dir, dataset_name, "annotations")
+        # # load annotations
+        # beat_path = Path(annotation_dir, "beats", audio_path.stem + ".beats")
+        # if not beat_path.exists():
+        #     print(
+        #         f"beat annotation {beat_path} not found for {audio_path}",
+        #     )
+        #     return False
         # create a folder with the name of the track
         folder_path = Path(self.audio_dir, "mono_tracks", dataset_name, audio_path.stem)
         # derive the name of the unaugmented file
@@ -428,6 +431,7 @@ def main(orig_audio_paths, pitch_shift, time_stretch, verbose):
         mel_args=mel_args,
         verbose=verbose,
     )
+    sc.spectrograms_dir = Path("C:\\Polina\\master\\thesis\\beat_this\\data\\gtzan_old\\audio\\spectrograms")
     sc.create_spects()
 
     # assemble into NPZ files
@@ -444,33 +448,10 @@ def main(orig_audio_paths, pitch_shift, time_stretch, verbose):
 
 if __name__ == "__main__":
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--orig_audio_paths",
-        type=str,
-        help="path to the file with the original audio paths for each dataset (default: %(default)s)",
-        default="data/audio_paths.csv",
-    )
-    parser.add_argument(
-        "--pitch_shift",
-        metavar="LOW:HIGH",
-        type=str,
-        default="-5:6",
-        help="pitch shift in semitones (default: %(default)s)",
-    )
-    parser.add_argument(
-        "--time_stretch",
-        metavar="MAX:STRIDE",
-        type=str,
-        default="20:4",
-        help="time stretch in percentage and stride (default: %(default)s)",
-    )
-    parser.add_argument("--verbose", action="store_true", help="verbose output")
-    args = parser.parse_args()
-
+    audio_path = r"C:\Polina\master\thesis\annotations\dataset_paths.csv"
     main(
-        args.orig_audio_paths,
-        ints(args.pitch_shift),
-        ints(args.time_stretch),
-        args.verbose,
+        audio_path,
+        (-1,1), 
+        (10, 2),
+       verbose =True
     )
