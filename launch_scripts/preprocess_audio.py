@@ -4,7 +4,7 @@ import concurrent.futures
 import os
 from pathlib import Path
 from zipfile import ZipFile
-
+import shutil
 import numpy as np
 import pandas as pd
 import soxr
@@ -79,6 +79,7 @@ class SpectCreation:
         self.augmentations = {}
         if pitch_shift is not None:
             self.augmentations["pitch"] = {"min": pitch_shift[0], "max": pitch_shift[1]}
+        self.augmentations["noise"] = 0.03
         if time_stretch is not None:
             self.augmentations["tempo"] = {
                 "min": -time_stretch[0],
@@ -94,18 +95,20 @@ class SpectCreation:
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = []
             for dataset_dir in self.mono_tracks_dir.iterdir():
-                for piece_dir in dataset_dir.iterdir():
-                    futures.append(
-                        executor.submit(
-                            self.create_spect_piece,
-                            piece_dir,
-                            Path(dataset_dir.name)
-                            / "annotations"
-                            / "beats"
-                            / f"{piece_dir.name}.beats",
-                            dataset_dir.name,
+                #dataset_dir = Path('audio/mono_tracks/gtzan_old')
+                #if dataset_dir.name != "gtzan_old":
+                    for piece_dir in dataset_dir.iterdir():
+                        futures.append(
+                            executor.submit(
+                                self.create_spect_piece,
+                                piece_dir,
+                                Path(dataset_dir.name)
+                                / "annotations"
+                                / "beats"
+                                / f"{piece_dir.name}.beats",
+                                dataset_dir.name,
+                            )
                         )
-                    )
             for future in tqdm(
                 concurrent.futures.as_completed(futures), total=len(futures)
             ):
@@ -257,6 +260,7 @@ class AudioPreprocessing(object):
                 "max": self.time_stretch[0],
                 "stride": self.time_stretch[1],
             },
+            "noise" : 0.03
         }
         augmentations_path = precomputed_augmentation_filenames(augmentations, self.ext)
         # stop here if all files exists
@@ -280,7 +284,8 @@ class AudioPreprocessing(object):
             and audio_path.suffix == f".{self.ext}"
         ):
             # shortcut: copy original file to mono path location
-            os.system("cp '{}' '{}'".format(audio_path, mono_path))
+            shutil.copy(audio_path, mono_path)
+            #os.system("cp '{}' '{}'".format(audio_path, mono_path))
         else:
             # we need to do some conversions for the unaugmented file
             if waveform.ndim != 1:
@@ -315,7 +320,17 @@ class AudioPreprocessing(object):
                 aug_sr=self.aug_sr,
                 out_sr=self.out_sr,
                 ext=self.ext,
-                verbose=self.verbose,
+                verbose=self.verbose
+            )
+        augment_audio_file(
+                folder_path,
+                waveform,
+                aug_type="noise",
+                amount=shift,
+                aug_sr=self.aug_sr,
+                out_sr=self.out_sr,
+                ext=self.ext,
+                verbose=self.verbose
             )
         for stretch in stretches:  # tempo augmentation
             augment_audio_file(
@@ -342,6 +357,10 @@ def augment_audio_file(
     elif aug_type == "shift":
         shift = amount
         stretch = 0
+    elif aug_type == "noise":
+        shift = 0
+        stretch = 0
+        noise_coef = 0.03
     else:
         raise ValueError(f"Unknown augmentation mode {aug_type}")
     suffix = ""
@@ -349,6 +368,9 @@ def augment_audio_file(
         suffix = suffix + f"_ps{shift}"
     if stretch != 0:
         suffix = suffix + f"_ts{stretch}"
+    if aug_type == "noise":
+        suffix = f"_noise_{noise_coef}"
+    
     out_path = Path(folder_path, f"track{suffix}.{ext}")
     # skip if it exists
     if out_path.exists():
@@ -368,7 +390,7 @@ def augment_audio_file(
         )
         # apply pedalboard
         augmented = board(waveform, aug_sr)
-    else:  # type == stretch
+    elif aug_type == "stretch":  # type == stretch
         if verbose:
             print(f"computing {out_path} with {stretch=}")
         augmented = time_stretch(
@@ -377,6 +399,11 @@ def augment_audio_file(
             stretch_factor=1 + stretch / 100,
             pitch_shift_in_semitones=0.0,
         ).squeeze()
+    else:   # type = noise
+        if verbose:
+            print(f"computing {out_path} with {noise_coef =}")
+        noise = np.random.randn(len(waveform))
+        augmented = waveform + noise_coef*noise
     # save to file
     if verbose:
         print(f"writing {out_path}")
@@ -452,6 +479,6 @@ if __name__ == "__main__":
     main(
         audio_path,
         (-1,1), 
-        (10, 2),
+        (2,1),
        verbose =True
     )
