@@ -401,9 +401,9 @@ def augment_audio_file(
             pitch_shift_in_semitones=0.0,
         ).squeeze()
     elif aug_type == "noise":
-        noise = np.random.normal(0, 0.01, size = waveform.shape)
-        augmented = waveform + noise
-        augmented = np.clip(noise, -1.0, 1.0)
+        noise_random = np.random.normal(0, 1, size = waveform.shape)
+        augmented = waveform + noise_random*noise / 100
+        augmented = np.clip(augmented, -1.0, 1.0)
         
     # save to file
     if verbose:
