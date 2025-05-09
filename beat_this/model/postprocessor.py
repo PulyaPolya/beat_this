@@ -33,7 +33,7 @@ class Postprocessor:
                 min_bpm=55.0,
                 max_bpm=215.0,
                 fps=self.fps,
-                transition_lambda=100,
+                transition_lambda=50   # changed (polina)
             )
 
     def __call__(

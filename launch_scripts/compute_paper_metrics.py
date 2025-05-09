@@ -3,7 +3,10 @@ from pathlib import Path
 import json
 import numpy as np
 from pytorch_lightning import Trainer, seed_everything
-
+import cProfile
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from beat_this.dataset import BeatDataModule
 from beat_this.inference import load_checkpoint
 from beat_this.model.pl_module import PLBeatThis
@@ -182,9 +185,10 @@ def plmodel_setup(checkpoint, eval_trim_beats, dbn, gpu):
     trainer = Trainer(
         accelerator=accelerator,
         devices=devices,
-        logger=None,
+        logger=False,
         deterministic=True,
         precision="16-mixed",
+        inference_mode=True
     )
     return model, trainer
 
@@ -256,6 +260,15 @@ if __name__ == "__main__":
     #     help="Type of aggregation to use for multiple models; ignored if only one model is given",
     # )
     args =  load_args_from_json("helpers/evaluate_params.json")
-    #args = parser.parse_args()
+    import cProfile
+    import pstats
 
+    # profiler = cProfile.Profile()
+    # profiler.enable()
+
+    # Run function
     main(args)
+
+    # profiler.disable()
+    # stats = pstats.Stats(profiler).sort_stats("cumulative")
+    # stats.print_stats(50)

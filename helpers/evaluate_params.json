@@ -1,7 +1,7 @@
 {
   "models": ["final0"],
   "datasplit": "test", 
-  "num_workers": 8,
+  "num_workers": 1,
   "eval_trim_beats": null,
   "dbn": null,
   "aggregation-type" : null,

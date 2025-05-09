@@ -100,9 +100,9 @@ class BeatTrackingDataset(Dataset):
             if (f"{remainder}/{aug_filename[:-4]}") not in self.spects.get(
                 dataset, ()
             ) and not (self.spect_basepath / item_name / aug_filename).exists():
-                print(
-                    f"Skipping {item_name} because not all necessary spectrograms are there."
-                )
+                # print(
+                #     f"Skipping {item_name} because not all necessary spectrograms are there."
+                # )
                 return
 
         # load beat and produce a default if beat values are not found
@@ -145,7 +145,9 @@ class BeatTrackingDataset(Dataset):
 
     def _get_spect(self, item):
         try:
-            dataset, filename = str(item["spect_path"]).split("/", 1)
+            #dataset, filename = str(item["spect_path"]).split("/", 1)
+            spect_path = item["spect_path"]
+            dataset, filename = spect_path.parts[0], "/".join(spect_path.parts[1:])
             spect = self.spects[dataset][filename[:-4]]
         except KeyError:
             spect = np.load(self.spect_basepath / item["spect_path"], mmap_mode="r")

@@ -21,7 +21,7 @@ from beat_this.preprocessing import LogMelSpect, load_audio
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
 #BASEPATH = Path(__file__).parent.parent.relative_to(Path.cwd())
-BASEPATH = Path(r"P:\datasets\geenres\fma\fma_small\fma_small\try")
+BASEPATH = Path(r"P:\datasets\geenres\fma\fma_small\fma_small")
 
 def save_audio(path, waveform, samplerate, resample_from=None):
     if resample_from and resample_from != samplerate:
@@ -45,7 +45,7 @@ def save_spectrogram(path, spectrogram, dtype=np.float16):
 
 
 class SpectCreation:
-    def __init__(self, pitch_shift, time_stretch, audio_sr, mel_args, verbose=False):
+    def __init__(self, pitch_shift, time_stretch, audio_sr, mel_args, noise, verbose=False):
         """
         Initialize the SpectCreation class. This assume that the audio files have been preprocessed with all the requested augmentations and are stored in the `mono_tracks` directory with the proper naming defined in AudioPreprocessing.
 
@@ -85,6 +85,8 @@ class SpectCreation:
                 "max": time_stretch[0],
                 "stride": time_stretch[1],
             }
+        if noise is not None:
+            self.augmentations["noise"] = noise
         # compute the names to consider according to the augmentations
         self.filenames = precomputed_augmentation_filenames(self.augmentations, "wav")
 
@@ -169,6 +171,7 @@ class AudioPreprocessing(object):
         ext="wav",
         pitch_shift=(-5, 6),
         time_stretch=(20, 4),
+        noise = None,
         verbose=False,
     ):
         """
@@ -212,6 +215,7 @@ class AudioPreprocessing(object):
                 time_stretch[1] if len(time_stretch) > 1 else 1,
             )
         self.time_stretch = time_stretch
+        self.noise = noise
         self.verbose = verbose
 
     def preprocess_audio(self):
@@ -257,6 +261,7 @@ class AudioPreprocessing(object):
                 "max": self.time_stretch[0],
                 "stride": self.time_stretch[1],
             },
+            "noise": self.noise
         }
         augmentations_path = precomputed_augmentation_filenames(augmentations, self.ext)
         # stop here if all files exists
@@ -328,6 +333,16 @@ class AudioPreprocessing(object):
                 ext=self.ext,
                 verbose=self.verbose,
             )
+        augment_audio_file(
+                folder_path,
+                waveform,
+                aug_type="noise",
+                amount=self.noise,
+                aug_sr=self.aug_sr,
+                out_sr=self.out_sr,
+                ext=self.ext,
+                verbose=self.verbose,
+            )
 
         return True
 
@@ -339,16 +354,24 @@ def augment_audio_file(
     if aug_type == "stretch":
         stretch = amount
         shift = 0
+        noise = 0
     elif aug_type == "shift":
         shift = amount
         stretch = 0
+        noise = 0
+    elif aug_type == "noise":
+        shift = 0
+        stretch = 0
+        noise = amount
     else:
         raise ValueError(f"Unknown augmentation mode {aug_type}")
     suffix = ""
     if shift != 0:
         suffix = suffix + f"_ps{shift}"
-    if stretch != 0:
+    elif stretch != 0:
         suffix = suffix + f"_ts{stretch}"
+    elif noise != 0:
+        suffix = suffix + f"_ns{noise}"
     out_path = Path(folder_path, f"track{suffix}.{ext}")
     # skip if it exists
     if out_path.exists():
@@ -368,7 +391,7 @@ def augment_audio_file(
         )
         # apply pedalboard
         augmented = board(waveform, aug_sr)
-    else:  # type == stretch
+    elif aug_type == "stretch":  # type == stretch
         if verbose:
             print(f"computing {out_path} with {stretch=}")
         augmented = time_stretch(
@@ -377,6 +400,11 @@ def augment_audio_file(
             stretch_factor=1 + stretch / 100,
             pitch_shift_in_semitones=0.0,
         ).squeeze()
+    elif aug_type == "noise":
+        noise = np.random.normal(0, 0.01, size = waveform.shape)
+        augmented = waveform + noise
+        augmented = np.clip(noise, -1.0, 1.0)
+        
     # save to file
     if verbose:
         print(f"writing {out_path}")
@@ -401,7 +429,7 @@ def ints(value):
     return value and tuple(map(int, value.split(":")))
 
 
-def main(orig_audio_paths, pitch_shift, time_stretch, verbose):
+def main(orig_audio_paths, pitch_shift, time_stretch, noise, verbose):
     # preprocess audio
     dp = AudioPreprocessing(
         orig_audio_paths=orig_audio_paths,
@@ -409,6 +437,7 @@ def main(orig_audio_paths, pitch_shift, time_stretch, verbose):
         aug_sr=44100,
         pitch_shift=pitch_shift,
         time_stretch=time_stretch,
+        noise = noise,
         verbose=verbose,
     )
     dp.preprocess_audio()
@@ -429,6 +458,7 @@ def main(orig_audio_paths, pitch_shift, time_stretch, verbose):
         time_stretch=time_stretch,
         audio_sr=22050,
         mel_args=mel_args,
+        noise = noise,
         verbose=verbose,
     )
    # sc.spectrograms_dir = Path("C:\\Polina\\master\\thesis\\beat_this\\data\\gtzan_old\\audio\\spectrograms")
@@ -448,10 +478,11 @@ def main(orig_audio_paths, pitch_shift, time_stretch, verbose):
 
 if __name__ == "__main__":
 
-    audio_path = r"C:\Polina\master\thesis\annotations\dataset_paths.csv"
+    audio_path = "dataset_paths.csv"
     main(
         audio_path,
         (-1,1), 
         (1, 2),
+        noise = 1,
        verbose =True
     )

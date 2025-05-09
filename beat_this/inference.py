@@ -1,5 +1,4 @@
 import inspect
-
 import numpy as np
 import soxr
 import torch
@@ -243,7 +242,7 @@ class Spect2Frames:
         self.float16 = float16
         self.model = load_model(checkpoint_path, self.device)
 
-    def spect2frames(self, spect):
+    def spect2frames(self, spect):   # where the prediction is made for file2beats (polina)
         with torch.inference_mode():
             with torch.autocast(enabled=self.float16, device_type=self.device.type):
                 model_prediction = split_predict_aggregate(
@@ -279,7 +278,7 @@ class Audio2Frames(Spect2Frames):
         return self.spect(signal)
 
     def __call__(self, signal, sr):
-        spect = self.signal2spect(signal, sr)
+        spect = self.signal2spect(signal, sr) # creating spectogtam
         return self.spect2frames(spect)
 
 

@@ -123,6 +123,9 @@ def precomputed_augmentation_filenames(augmentations, ext="npy"):
                 if percentage == 0:
                     continue
                 filenames.append(f"track_ts{percentage}.{ext}")
+        elif method == "noise":
+            noise = augmentations['noise']
+            filenames.append(f"track_ns{noise}.{ext}")
     return filenames
 
 
