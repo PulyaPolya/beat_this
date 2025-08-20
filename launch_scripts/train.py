@@ -5,7 +5,9 @@ import torch
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
-
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from beat_this.dataset import BeatDataModule
 from beat_this.model.pl_module import PLBeatThis
 
@@ -110,11 +112,11 @@ def main(args):
             filename=f"{args.name} S{args.seed} {params_str}".strip(),
         )
     )
-
+    use_gpu = torch.cuda.is_available() 
     trainer = Trainer(
         max_epochs=args.max_epochs,
-        accelerator="auto",
-        devices=[args.gpu],
+        accelerator="gpu" if use_gpu else "cpu",
+        devices=1 if use_gpu else 1, 
         num_sanity_val_steps=1,
         logger=logger,
         callbacks=callbacks,
