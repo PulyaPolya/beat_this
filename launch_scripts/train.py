@@ -7,9 +7,70 @@ from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 import sys
 import os
+from dataclasses import dataclass, field, asdict
+from typing import List, Optional
+from pathlib import Path
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from beat_this.dataset import BeatDataModule
 from beat_this.model.pl_module import PLBeatThis
+import yaml
+
+
+@dataclass
+class Config:
+    name: str = ""
+    gpu: int = 0
+    force_flash_attention: bool = False
+    compile: List[str] = field(default_factory=lambda: ["frontend", "transformer_blocks", "task_heads"])
+    n_layers: int = 6
+    transformer_dim: int = 512
+    frontend_dropout: float = 0.1
+    transformer_dropout: float = 0.2
+    lr: float = 8e-4
+    weight_decay: float = 0.01
+    logger: str = "none"  # or "wandb"
+    num_workers: int = 8
+    n_heads: int = 16
+    fps: int = 50
+    loss: str = "shift_tolerant_weighted_bce"  # one of: shift_tolerant_weighted_bce, fast_shift_tolerant_weighted_bce, weighted_bce, bce
+    warmup_steps: int = 1000
+    max_epochs: int = 100
+    batch_size: int = 8
+    accumulate_grad_batches: int = 8
+    train_length: int = 1500
+    dbn: bool = False
+    eval_trim_beats: float = 5.0
+    val_frequency: int = 5
+    tempo_augmentation: bool = True
+    pitch_augmentation: bool = True
+    mask_augmentation: bool = True
+    sum_head: bool = True
+    partial_transformers: bool = True
+    length_based_oversampling_factor: float = 0.65
+    val: bool = True
+    hung_data: bool = False
+    fold: Optional[int] = None
+    seed: int = 0
+
+def _load_yaml_or_json(path: Path) -> dict:
+    raw = path.read_text()
+    if path.suffix.lower() in (".yml", ".yaml"):
+        data = yaml.safe_load(raw) or {}
+    return data
+
+def load_config(path: str | os.PathLike) -> Config:
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"Config file not found: {p}")
+    data = _load_yaml_or_json(p)
+    # allow hyphenated keys in file
+    data = {k.replace("-", "_"): v for k, v in data.items()}
+    # validate keys
+    valid = set(Config.__annotations__.keys())
+    unknown = set(data) - valid
+    if unknown:
+        raise ValueError(f"Unknown config keys: {sorted(unknown)}")
+    return Config(**data)
 
 
 def main(args):
@@ -131,149 +192,7 @@ def main(args):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--name", type=str, default="")
-    parser.add_argument("--gpu", type=int, default=0)
-    parser.add_argument(
-        "--force-flash-attention", default=False, action=argparse.BooleanOptionalAction
-    )
-    parser.add_argument(
-        "--compile",
-        action="store",
-        nargs="*",
-        type=str,
-        default=["frontend", "transformer_blocks", "task_heads"],
-        help="Which model parts to compile, among frontend, transformer_encoder, task_heads",
-    )
-    parser.add_argument("--n-layers", type=int, default=6)
-    parser.add_argument("--transformer-dim", type=int, default=512)
-    parser.add_argument(
-        "--frontend-dropout",
-        type=float,
-        default=0.1,
-        help="dropout rate to apply in the frontend",
-    )
-    parser.add_argument(
-        "--transformer-dropout",
-        type=float,
-        default=0.2,
-        help="dropout rate to apply in the main transformer blocks",
-    )
-    parser.add_argument("--lr", type=float, default=0.0008)
-    parser.add_argument("--weight-decay", type=float, default=0.01)
-    parser.add_argument("--logger", type=str, choices=["wandb", "none"], default="none")
-    parser.add_argument("--num-workers", type=int, default=8)
-    parser.add_argument("--n-heads", type=int, default=16)
-    parser.add_argument("--fps", type=int, default=50, help="The spectrograms fps.")
-    parser.add_argument(
-        "--loss",
-        type=str,
-        default="shift_tolerant_weighted_bce",
-        choices=[
-            "shift_tolerant_weighted_bce",
-            "fast_shift_tolerant_weighted_bce",
-            "weighted_bce",
-            "bce",
-        ],
-        help="The loss to use",
-    )
-    parser.add_argument(
-        "--warmup-steps", type=int, default=1000, help="warmup steps for optimizer"
-    )
-    parser.add_argument(
-        "--max-epochs", type=int, default=100, help="max epochs for training"
-    )
-    parser.add_argument(
-        "--batch-size", type=int, default=8, help="batch size for training"
-    )
-    parser.add_argument("--accumulate-grad-batches", type=int, default=8)
-    parser.add_argument(
-        "--train-length",
-        type=int,
-        default=1500,
-        help="maximum seq length for training in frames",
-    )
-    parser.add_argument(
-        "--dbn",
-        default=False,
-        action=argparse.BooleanOptionalAction,
-        help="use madmom postprocessing DBN",
-    )
-    parser.add_argument(
-        "--eval-trim-beats",
-        metavar="SECONDS",
-        type=float,
-        default=5,
-        help="Skip the first given seconds per piece in evaluating (default: %(default)s)",
-    )
-    parser.add_argument(
-        "--val-frequency",
-        metavar="N",
-        type=int,
-        default=5,
-        help="validate every N epochs (default: %(default)s)",
-    )
-    parser.add_argument(
-        "--tempo-augmentation",
-        default=True,
-        action=argparse.BooleanOptionalAction,
-        help="Use precomputed tempo aumentation",
-    )
-    parser.add_argument(
-        "--pitch-augmentation",
-        default=True,
-        action=argparse.BooleanOptionalAction,
-        help="Use precomputed pitch aumentation",
-    )
-    parser.add_argument(
-        "--mask-augmentation",
-        default=True,
-        action=argparse.BooleanOptionalAction,
-        help="Use online mask aumentation",
-    )
-    parser.add_argument(
-        "--sum-head",
-        default=True,
-        action=argparse.BooleanOptionalAction,
-        help="Use SumHead instead of two separate Linear heads",
-    )
-    parser.add_argument(
-        "--partial-transformers",
-        default=True,
-        action=argparse.BooleanOptionalAction,
-        help="Use Partial transformers in the frontend",
-    )
-    parser.add_argument(
-        "--length-based-oversampling-factor",
-        type=float,
-        default=0.65,
-        help="The factor to oversample the long pieces in the dataset. Set to 0 to only take one excerpt for each piece.",
-    )
-    parser.add_argument(
-        "--val",
-        default=True,
-        action=argparse.BooleanOptionalAction,
-        help="Train on all data, including validation data, escluding test data. The validation metrics will still be computed, but they won't carry any meaning.",
-    )
-    parser.add_argument(
-        "--hung-data",
-        default=False,
-        action=argparse.BooleanOptionalAction,
-        help="Limit the training to Hung et al. data. The validation will still be computed on all datasets.",
-    )
-    parser.add_argument(
-        "--fold",
-        type=int,
-        default=None,
-        help="If given, the CV fold number to *not* train on (0-based).",
-    )
-    parser.add_argument(
-        "--seed",
-        type=int,
-        default=0,
-        help="Seed for the random number generators.",
-    )
+    cfg =load_config("launch_scripts/train_params.yaml")
+   # args = parser.parse_args()
 
-    args = parser.parse_args()
-
-    main(args)
+    main(cfg)
