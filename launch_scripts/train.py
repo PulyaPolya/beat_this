@@ -4,7 +4,9 @@ from pathlib import Path
 import torch
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
+#from lightning.pytorch.callbacks import ModelSummary
 from pytorch_lightning.loggers import WandbLogger
+from torchinfo import summary
 import sys
 import os
 from dataclasses import dataclass, field, asdict
@@ -52,6 +54,9 @@ class Config:
     fold: Optional[int] = None
     seed: int = 0
     data_path : str = "data"
+    checkpoint_path : str = "data"
+    resume_checkpoint: Optional[str] = None
+
 
 def _load_yaml_or_json(path: Path) -> dict:
     raw = path.read_text()
@@ -83,8 +88,12 @@ def main(args):
 
     params_str = f"{'noval ' if not args.val else ''}{'hung ' if args.hung_data else ''}{'fold' + str(args.fold) + ' ' if args.fold is not None else ''}{args.loss}-h{args.transformer_dim}-aug{args.tempo_augmentation}{args.pitch_augmentation}{args.mask_augmentation}{' nosumH ' if not args.sum_head else ''}{' nopartialT ' if not args.partial_transformers else ''}"
     if args.logger == "wandb":
+        if args.resume_checkpoint and args.resume_id:
+            wandb_args = dict(id=args.resume_id, resume="must")
+        else:
+            wandb_args = {}
         logger = WandbLogger(
-            project="beat_this", name=f"{args.name} {params_str}".strip()
+            project="beat_this", name=f"{args.name} {params_str}".strip(), **wandb_args
         )
     else:
         logger = None
@@ -97,9 +106,8 @@ def main(args):
 
     data_dir =Path(args.data_path) / "data" #Path(__file__).parent.parent.relative_to(Path.cwd()) / "data"
     print(data_dir)
-    checkpoint_dir = (
-        Path(__file__).parent.parent.relative_to(Path.cwd()) / "checkpoints"
-    )
+    checkpoint_dir = Path(args.checkpoint_path) 
+    #(Path(__file__).parent.parent.relative_to(Path.cwd()) / "checkpoints")
     augmentations = {}
     if args.tempo_augmentation:
         augmentations["tempo"] = {"min": -20, "max": 20, "stride": 4}
@@ -159,6 +167,8 @@ def main(args):
         sum_head=args.sum_head,
         partial_transformers=args.partial_transformers,
     )
+    #print(ModelSummary(model=pl_model, max_depth=2)) 
+    print(summary(pl_model))
     for part in args.compile:
         if hasattr(pl_model.model, part):
             setattr(pl_model.model, part, torch.compile(getattr(pl_model.model, part)))
@@ -174,6 +184,7 @@ def main(args):
             dirpath=str(checkpoint_dir),
             filename=f"{args.name} S{args.seed} {params_str}".strip(),
         )
+        
     )
     use_gpu = torch.cuda.is_available() 
     trainer = Trainer(
@@ -188,8 +199,19 @@ def main(args):
         accumulate_grad_batches=args.accumulate_grad_batches,
         check_val_every_n_epoch=args.val_frequency,
     )
+    current_state = pl_model.state_dict()
+    #print(list(current_state.keys())) # this model doesn't have orig suffix
+    ckpt = torch.load(args.resume_checkpoint, map_location="cpu")
 
-    trainer.fit(pl_model, datamodule)
+# In Lightning checkpoints the model weights are under "state_dict"
+    ckpt_state = ckpt["state_dict"]
+
+    print("== Current model keys ==")
+    print(list(pl_model.state_dict().keys())[:20])
+
+    print("\n== Checkpoint keys ==")
+    print(list(ckpt_state.keys())[:20])
+    trainer.fit(pl_model, datamodule, ckpt_path=args.resume_checkpoint)
     trainer.test(pl_model, datamodule)
 
 

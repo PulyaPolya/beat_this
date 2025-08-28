@@ -23,7 +23,7 @@ def main(args):
         checkpoint = load_checkpoint(checkpoint_path)
 
         # create datamodule
-        datamodule = datamodule_setup(checkpoint, args.num_workers, args.datasplit)
+        datamodule = datamodule_setup(checkpoint, args)
         # create model and trainer
         model, trainer = plmodel_setup(
             checkpoint, args.eval_trim_beats, args.dbn, args.gpu
@@ -32,7 +32,7 @@ def main(args):
         metrics, dataset, preds, piece = compute_predictions(
             model, trainer, datamodule.predict_dataloader()
         )
-
+        print(metrics)
         # compute averaged metrics
         averaged_metrics = {k: np.mean(v) for k, v in metrics.items()}
         # compute metrics averaged by dataset
@@ -138,15 +138,15 @@ def main(args):
             raise ValueError(f"Unknown aggregation type {args.aggregation_type}")
 
 
-def datamodule_setup(checkpoint, num_workers, datasplit):
+def datamodule_setup(checkpoint, args):
     # Load the datamodule
     print("Creating datamodule")
-    data_dir = Path(__file__).parent.parent.relative_to(Path.cwd()) / "data"
+    data_dir = Path(args.data_path) / "data" #Path(__file__).parent.parent.relative_to(Path.cwd()) / "data"
     datamodule_hparams = checkpoint["datamodule_hyper_parameters"]
     # update the hparams with the ones from the arguments
-    if num_workers is not None:
-        datamodule_hparams["num_workers"] = num_workers
-    datamodule_hparams["predict_datasplit"] = datasplit
+    if args.num_workers is not None:
+        datamodule_hparams["num_workers"] = args.num_workers
+    datamodule_hparams["predict_datasplit"] = args.datasplit
     datamodule_hparams["data_dir"] = data_dir
     datamodule = BeatDataModule(**datamodule_hparams)
     datamodule.setup(stage="predict")

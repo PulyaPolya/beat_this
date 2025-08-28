@@ -1,9 +1,10 @@
 {
-  "models": ["final0"],
-  "datasplit": "test", 
+  "models": ["/home/ui556004/projects/beat_this/beat_this/final0.ckpt"],
+  "datasplit": "val", 
   "num_workers": 1,
   "eval_trim_beats": null,
   "dbn": null,
   "aggregation-type" : null,
-  "gpu": -1
+  "gpu": -1,
+  "data_path" : "/hpcwork/ui556004/data/beat_this/clusters/cluster_0"
 }
