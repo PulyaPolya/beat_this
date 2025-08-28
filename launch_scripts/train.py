@@ -51,6 +51,7 @@ class Config:
     hung_data: bool = False
     fold: Optional[int] = None
     seed: int = 0
+    data_path : str = "data"
 
 def _load_yaml_or_json(path: Path) -> dict:
     raw = path.read_text()
@@ -94,7 +95,8 @@ def main(args):
         torch.backends.cuda.enable_mem_efficient_sdp(False)
         torch.backends.cuda.enable_math_sdp(False)
 
-    data_dir = Path(__file__).parent.parent.relative_to(Path.cwd()) / "data"
+    data_dir =Path(args.data_path) / "data" #Path(__file__).parent.parent.relative_to(Path.cwd()) / "data"
+    print(data_dir)
     checkpoint_dir = (
         Path(__file__).parent.parent.relative_to(Path.cwd()) / "checkpoints"
     )

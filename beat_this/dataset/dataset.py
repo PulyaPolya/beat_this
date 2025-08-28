@@ -55,12 +55,15 @@ class BeatTrackingDataset(Dataset):
         datasets = sorted(set(name.split("/", 1)[0] for name in item_names))
         # load dataset info
         self.dataset_info = self._load_dataset_infos(datasets)
+        #print(item_names)
         # load .npz spectrogram bundles, if any
         self.spects = self._load_spect_bundles(datasets)
+        #print(len(self.spects))
         # load the annotations in parallel
         with concurrent.futures.ThreadPoolExecutor() as executor:
             items = executor.map(self._load_dataset_item, item_names)
         items = [item for item in items if item is not None]
+        #print(len(items))
         if self.length_based_oversampling_factor and self.train_length is not None:
             # oversample the dataset according to the audio lengths, so that long pieces are sampled more often
             oversampled_items = []
@@ -96,7 +99,13 @@ class BeatTrackingDataset(Dataset):
     def _load_dataset_item(self, item_name):
         # stop if not all the augmented audio files are there
         dataset, remainder = item_name.split("/", 1)
+        #print(f"item name {item_name}")
+        #print(remainder)
         for aug_filename in precomputed_augmentation_filenames(self.augmentations):
+            #print(f"aug file{aug_filename}")
+            ##print((f"aug file{remainder}/{aug_filename[:-4]}"))
+            #print(not (self.spect_basepath / item_name / aug_filename).exists())
+            #print((self.spect_basepath / item_name / aug_filename))
             if (f"{remainder}/{aug_filename[:-4]}") not in self.spects.get(
                 dataset, ()
             ) and not (self.spect_basepath / item_name / aug_filename).exists():
@@ -363,6 +372,7 @@ class BeatDataModule(pl.LightningDataModule):
                     item for item in self.train_items if regexp.match(item)
                 ]
             self.val_items.sort()
+            #print(self.val_items)
             self.train_items.sort()
 
         # load validation set
