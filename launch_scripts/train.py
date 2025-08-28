@@ -199,19 +199,22 @@ def main(args):
         accumulate_grad_batches=args.accumulate_grad_batches,
         check_val_every_n_epoch=args.val_frequency,
     )
-    current_state = pl_model.state_dict()
     #print(list(current_state.keys())) # this model doesn't have orig suffix
     ckpt = torch.load(args.resume_checkpoint, map_location="cpu")
 
 # In Lightning checkpoints the model weights are under "state_dict"
     ckpt_state = ckpt["state_dict"]
 
-    print("== Current model keys ==")
-    print(list(pl_model.state_dict().keys())[:20])
 
     print("\n== Checkpoint keys ==")
     print(list(ckpt_state.keys())[:20])
-    trainer.fit(pl_model, datamodule, ckpt_path=args.resume_checkpoint)
+
+    ckpt = torch.load(args.resume_checkpoint, map_location="cpu")
+    missing, unexpected = pl_model.load_state_dict(ckpt["state_dict"], strict=False) # why does it work??
+    print("Loaded weights. Missing:", missing)
+    print("Unexpected:", unexpected)
+
+    trainer.fit(pl_model, datamodule)
     trainer.test(pl_model, datamodule)
 
 

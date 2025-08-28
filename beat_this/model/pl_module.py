@@ -308,7 +308,7 @@ class PLBeatThis(LightningModule):
     def _load_from_state_dict(self, state_dict, prefix, *args, **kwargs):
         # remove _orig_mod prefixes for compiled models
         print(state_dict.keys())
-        state_dict = replace_state_dict_key(state_dict, "_orig_mod.", "")
+        #state_dict = replace_state_dict_key(state_dict, "_orig_mod.", "")
         print(state_dict.keys())
         super()._load_from_state_dict(state_dict, prefix, *args, **kwargs)
 
