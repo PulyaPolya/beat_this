@@ -1,6 +1,6 @@
 {
-  "models": ["/home/ui556004/projects/beat_this/beat_this/final0.ckpt"],
-  "datasplit": "val", 
+  "models": ["/home/ui556004/projects/beat_this/launch_scripts/checkpoints/0try.ckpt"],
+  "datasplit": "test", 
   "num_workers": 1,
   "eval_trim_beats": null,
   "dbn": null,

@@ -10,6 +10,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from beat_this.dataset import BeatDataModule
 from beat_this.inference import load_checkpoint
 from beat_this.model.pl_module import PLBeatThis
+import json
 
 # for repeatability
 seed_everything(0, workers=True)
@@ -29,11 +30,14 @@ def main(args):
             checkpoint, args.eval_trim_beats, args.dbn, args.gpu
         )
         # predict
-        metrics, dataset, preds, piece = compute_predictions(
+        metrics, dataset, preds, piece, dict_all_results = compute_predictions(
             model, trainer, datamodule.predict_dataloader()
         )
         print(metrics)
         # compute averaged metrics
+        #print(dict_all_results)
+        with open('test_scores.json', 'w') as fp:
+            json.dump(dict_all_results, fp)
         averaged_metrics = {k: np.mean(v) for k, v in metrics.items()}
         # compute metrics averaged by dataset
         dataset_metrics = {
@@ -64,7 +68,7 @@ def main(args):
                     checkpoint, args.eval_trim_beats, args.dbn, args.gpu
                 )
 
-                metrics, dataset, preds, piece = compute_predictions(
+                metrics, dataset, preds, piece, dict_all_results = compute_predictions(
                     model, trainer, datamodule.predict_dataloader()
                 )
                 # compute averaged metrics for one model
@@ -197,12 +201,13 @@ def compute_predictions(model, trainer, predict_dataloader):
     print("Computing predictions ...")
     out = trainer.predict(model, predict_dataloader)
     metrics = [o[0] for o in out]
+    dict_all_results = {out[i][3][0]: out[i][0] for i in range(len(out))}
     preds = [o[1] for o in out]
     dataset = np.asarray([o[2][0] for o in out])
     piece = np.asarray([o[3][0] for o in out])
     # convert metrics from list of per-batch dictionaries to a single dictionary with np arrays as values
     metrics = {k: np.asarray([m[k] for m in metrics]) for k in metrics[0]}
-    return metrics, dataset, preds, piece
+    return metrics, dataset, preds, piece, dict_all_results 
 
 def load_args_from_json(json_file):
     """Load arguments from a JSON file."""
