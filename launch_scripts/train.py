@@ -56,6 +56,8 @@ class Config:
     data_path : str = "data"
     checkpoint_path : str = "data"
     resume_checkpoint: Optional[str] = None
+    resume_id :  Optional[str] = None
+    wandb_name : Optional[str] = None
 
 
 def _load_yaml_or_json(path: Path) -> dict:
@@ -93,7 +95,7 @@ def main(args):
         else:
             wandb_args = {}
         logger = WandbLogger(
-            project="beat_this", name=f"{args.name} {params_str}".strip(), **wandb_args
+            project="beat_this", name=args.wandb_name, **wandb_args
         )
     else:
         logger = None
@@ -203,17 +205,28 @@ def main(args):
     ckpt = torch.load(args.resume_checkpoint, map_location="cpu")
 
 # In Lightning checkpoints the model weights are under "state_dict"
-    ckpt_state = ckpt["state_dict"]
+    # ckpt_state = ckpt["state_dict"]
 
 
-    print("\n== Checkpoint keys ==")
-    print(list(ckpt_state.keys())[:20])
+    # print("\n== Checkpoint keys ==")
+    # print(list(ckpt_state.keys())[:20])
 
+    # ckpt = torch.load(args.resume_checkpoint, map_location="cpu")
+    # missing, unexpected = pl_model.load_state_dict(ckpt["state_dict"], strict=False) # why does it work??
+    # print("Loaded weights. Missing:", missing)
+    # print("Unexpected:", unexpected)
+    param_name = "model.frontend.stem.bn1d.weight" # pick any key from your model
+    before = pl_model.state_dict()[param_name].clone()
+
+    # Load weights
     ckpt = torch.load(args.resume_checkpoint, map_location="cpu")
-    missing, unexpected = pl_model.load_state_dict(ckpt["state_dict"], strict=False) # why does it work??
+    missing, unexpected = pl_model.load_state_dict(ckpt["state_dict"], strict=False)
     print("Loaded weights. Missing:", missing)
     print("Unexpected:", unexpected)
+    after = pl_model.state_dict()[param_name]
 
+    print("Are weights identical?", torch.equal(before, after))
+    print("Norm before:", before.norm().item(), "after:", after.norm().item())
     trainer.fit(pl_model, datamodule)
     trainer.test(pl_model, datamodule)
 
