@@ -95,7 +95,7 @@ def main(args):
         else:
             wandb_args = {}
         logger = WandbLogger(
-            project="beat_this", name=args.wandb_name, **wandb_args
+            project="beat_this", name=args.wandb_name, config = vars(args), **wandb_args
         )
     else:
         logger = None
@@ -184,7 +184,7 @@ def main(args):
         ModelCheckpoint(
             every_n_epochs=1,
             dirpath=str(checkpoint_dir),
-            filename=f"{args.name} S{args.seed} {params_str}".strip(),
+            filename=f"{args.name}S{args.seed}{params_str}".strip(),
         )
         
     )
@@ -193,7 +193,7 @@ def main(args):
         max_epochs=args.max_epochs,
         accelerator="gpu" if use_gpu else "cpu",
         devices=1 if use_gpu else 1, 
-        num_sanity_val_steps=1,
+        num_sanity_val_steps=0,
         logger=logger,
         callbacks=callbacks,
         log_every_n_steps=1,
@@ -226,10 +226,11 @@ def main(args):
     after = pl_model.state_dict()[param_name]
 
     print("Are weights identical?", torch.equal(before, after))
-    print("Norm before:", before.norm().item(), "after:", after.norm().item())
+
+    print(f"validating the model before")
+    trainer.validate(pl_model, datamodule=datamodule)
     trainer.fit(pl_model, datamodule)
     trainer.test(pl_model, datamodule)
-
 
 if __name__ == "__main__":
     cfg =load_config("launch_scripts/train_params.yaml")

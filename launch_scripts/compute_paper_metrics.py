@@ -33,7 +33,7 @@ def main(args):
         metrics, dataset, preds, piece, dict_all_results = compute_predictions(
             model, trainer, datamodule.predict_dataloader()
         )
-        print(metrics)
+        #print(metrics)
         # compute averaged metrics
         #print(dict_all_results)
         with open('test_scores.json', 'w') as fp:
