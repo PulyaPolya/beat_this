@@ -331,7 +331,8 @@ class Metrics:
         ):  # limit the metrics that are computed during validation to speed up training
             fmeasure = mir_eval.beat.f_measure(truth, preds)
             cemgil = mir_eval.beat.cemgil(truth, preds)
-            return {"F-measure": fmeasure, "Cemgil": cemgil}
+            CMLc, CMLt, AMLc, AMLt = mir_eval.beat.continuity(truth, preds)
+            return {"F-measure": fmeasure, "Cemgil": cemgil, "CMLt": CMLt, "AMLt": AMLt}
         elif step == "test":  # compute all metrics during testing
             CMLc, CMLt, AMLc, AMLt = mir_eval.beat.continuity(truth, preds)
             fmeasure = mir_eval.beat.f_measure(truth, preds)

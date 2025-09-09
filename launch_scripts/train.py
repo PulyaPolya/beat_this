@@ -57,7 +57,7 @@ class Config:
     checkpoint_path : str = "data"
     resume_checkpoint: Optional[str] = None
     resume_id :  Optional[str] = None
-    wandb_name : Optional[str] = None
+    #wandb_name : Optional[str] = None
 
 
 def _load_yaml_or_json(path: Path) -> dict:
@@ -95,7 +95,7 @@ def main(args):
         else:
             wandb_args = {}
         logger = WandbLogger(
-            project="beat_this", name=args.wandb_name, config = vars(args), **wandb_args
+            project="beat_this", name=args.name, config = vars(args), **wandb_args
         )
     else:
         logger = None
@@ -201,34 +201,23 @@ def main(args):
         accumulate_grad_batches=args.accumulate_grad_batches,
         check_val_every_n_epoch=args.val_frequency,
     )
-    #print(list(current_state.keys())) # this model doesn't have orig suffix
-    ckpt = torch.load(args.resume_checkpoint, map_location="cpu")
+    if args.resume_checkpoint:
+        ckpt = torch.load(args.resume_checkpoint, map_location="cpu")
 
-# In Lightning checkpoints the model weights are under "state_dict"
-    # ckpt_state = ckpt["state_dict"]
+        param_name = "model.frontend.stem.bn1d.weight" # pick any key from your model
+        before = pl_model.state_dict()[param_name].clone()
 
+        # Load weights
+        ckpt = torch.load(args.resume_checkpoint, map_location="cpu")
+        missing, unexpected = pl_model.load_state_dict(ckpt["state_dict"], strict=False)
+        print("Loaded weights. Missing:", missing)
+        print("Unexpected:", unexpected)
+        after = pl_model.state_dict()[param_name]
 
-    # print("\n== Checkpoint keys ==")
-    # print(list(ckpt_state.keys())[:20])
+        print("Are weights identical?", torch.equal(before, after))
 
-    # ckpt = torch.load(args.resume_checkpoint, map_location="cpu")
-    # missing, unexpected = pl_model.load_state_dict(ckpt["state_dict"], strict=False) # why does it work??
-    # print("Loaded weights. Missing:", missing)
-    # print("Unexpected:", unexpected)
-    param_name = "model.frontend.stem.bn1d.weight" # pick any key from your model
-    before = pl_model.state_dict()[param_name].clone()
-
-    # Load weights
-    ckpt = torch.load(args.resume_checkpoint, map_location="cpu")
-    missing, unexpected = pl_model.load_state_dict(ckpt["state_dict"], strict=False)
-    print("Loaded weights. Missing:", missing)
-    print("Unexpected:", unexpected)
-    after = pl_model.state_dict()[param_name]
-
-    print("Are weights identical?", torch.equal(before, after))
-
-    print(f"validating the model before")
-    trainer.validate(pl_model, datamodule=datamodule)
+        print(f"validating the model before")
+        trainer.validate(pl_model, datamodule=datamodule)
     trainer.fit(pl_model, datamodule)
     trainer.test(pl_model, datamodule)
 
