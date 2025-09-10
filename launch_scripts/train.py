@@ -16,7 +16,38 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from beat_this.dataset import BeatDataModule
 from beat_this.model.pl_module import PLBeatThis
 import yaml
+import torch.nn as nn
 
+def freeze_by_prefix(module: nn.Module, prefixes):
+    if isinstance(prefixes, str):
+        prefixes = [prefixes]
+    for name, p in module.named_parameters():
+        if any(name.startswith(pref) for pref in prefixes):
+            p.requires_grad = False
+
+def unfreeze_by_prefix(module: nn.Module, prefixes):
+    if isinstance(prefixes, str):
+        prefixes = [prefixes]
+    for name, p in module.named_parameters():
+        if any(name.startswith(pref) for pref in prefixes):
+            p.requires_grad = True
+
+def set_bn_eval_by_prefix(module: nn.Module, prefixes):
+    if isinstance(prefixes, str):
+        prefixes = [prefixes]
+    for n, m in module.named_modules():
+        if any(n.startswith(pref) for pref in prefixes):
+            if isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
+                m.eval()
+
+def freeze_layers(num_to_freeze, pl_model):
+    layers_to_freeze = [ "model.frontend._orig_mod"]
+    for i in range(num_to_freeze):
+        layers_to_freeze.append(f"model.transformer_blocks._orig_mod.layers.{i}")
+    freeze_by_prefix(pl_model, layers_to_freeze)
+
+    set_bn_eval_by_prefix(pl_model, layers_to_freeze)
+    #return pl_model
 
 @dataclass
 class Config:
@@ -206,14 +237,17 @@ def main(args):
 
         param_name = "model.frontend.stem.bn1d.weight" # pick any key from your model
         before = pl_model.state_dict()[param_name].clone()
-
+        freeze_layers(3, pl_model)
         # Load weights
         ckpt = torch.load(args.resume_checkpoint, map_location="cpu")
         missing, unexpected = pl_model.load_state_dict(ckpt["state_dict"], strict=False)
         print("Loaded weights. Missing:", missing)
         print("Unexpected:", unexpected)
         after = pl_model.state_dict()[param_name]
-
+        
+        total = sum(p.numel() for p in pl_model.parameters())
+        trainable = sum(p.numel() for p in pl_model.parameters() if p.requires_grad)
+        print(f"Trainable: {trainable:,} / {total:,}")
         print("Are weights identical?", torch.equal(before, after))
 
         print(f"validating the model before")
