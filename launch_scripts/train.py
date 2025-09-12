@@ -17,6 +17,18 @@ from beat_this.dataset import BeatDataModule
 from beat_this.model.pl_module import PLBeatThis
 import yaml
 import torch.nn as nn
+import random
+import numpy as np
+
+def set_seed(seed=42):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+    # For full reproducibility
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 def freeze_by_prefix(module: nn.Module, prefixes):
     if isinstance(prefixes, str):
@@ -88,6 +100,8 @@ class Config:
     checkpoint_path : str = "data"
     resume_checkpoint: Optional[str] = None
     resume_id :  Optional[str] = None
+    freeze_layers: Optional[int] = None
+    save_frequency: Optional[int] = None
     #wandb_name : Optional[str] = None
 
 
@@ -115,6 +129,7 @@ def load_config(path: str | os.PathLike) -> Config:
 def main(args):
     # for repeatability
     seed_everything(args.seed, workers=True)
+    set_seed(args.seed)
 
     print("Starting a new run with the following parameters:")
     print(args)
@@ -139,7 +154,8 @@ def main(args):
 
     data_dir =Path(args.data_path) / "data" #Path(__file__).parent.parent.relative_to(Path.cwd()) / "data"
     print(data_dir)
-    checkpoint_dir = Path(args.checkpoint_path) 
+    
+    #checkpoint_dir = Path(args.checkpoint_path) 
     #(Path(__file__).parent.parent.relative_to(Path.cwd()) / "checkpoints")
     augmentations = {}
     if args.tempo_augmentation:
@@ -210,12 +226,20 @@ def main(args):
             raise ValueError("The model is missing the part", part, "to compile")
 
     callbacks = [LearningRateMonitor(logging_interval="step")]
-    # save only the last model
+    # save every 5 epochs
+    checkpoint_folder = os.path.join(args.checkpoint_path, f"{args.name}S{args.seed}{params_str}".strip() )
+    if args.save_frequency:
+        save_top_k = -1
+        every_n_epochs=5
+    else:
+        save_top_k = 1
+        every_n_epochs=args.val_frequency
     callbacks.append(
         ModelCheckpoint(
-            every_n_epochs=1,
-            dirpath=str(checkpoint_dir),
-            filename=f"{args.name}S{args.seed}{params_str}".strip(),
+            dirpath=checkpoint_folder,
+            filename="{epoch:02d}-valf{val_F_measure_beat:.4f}",
+            save_top_k=save_top_k,
+            every_n_epochs=every_n_epochs,
         )
         
     )
@@ -237,19 +261,19 @@ def main(args):
 
         param_name = "model.frontend.stem.bn1d.weight" # pick any key from your model
         before = pl_model.state_dict()[param_name].clone()
-        freeze_layers(3, pl_model)
         # Load weights
         ckpt = torch.load(args.resume_checkpoint, map_location="cpu")
         missing, unexpected = pl_model.load_state_dict(ckpt["state_dict"], strict=False)
         print("Loaded weights. Missing:", missing)
         print("Unexpected:", unexpected)
         after = pl_model.state_dict()[param_name]
-        
-        total = sum(p.numel() for p in pl_model.parameters())
-        trainable = sum(p.numel() for p in pl_model.parameters() if p.requires_grad)
-        print(f"Trainable: {trainable:,} / {total:,}")
         print("Are weights identical?", torch.equal(before, after))
-
+        if args.freeze_layers:
+            freeze_layers(args.freeze_layers, pl_model)
+            total = sum(p.numel() for p in pl_model.parameters())
+            trainable = sum(p.numel() for p in pl_model.parameters() if p.requires_grad)
+            print(f"Trainable: {trainable:,} / {total:,}")
+    
         print(f"validating the model before")
         trainer.validate(pl_model, datamodule=datamodule)
     trainer.fit(pl_model, datamodule)
