@@ -142,6 +142,7 @@ class Config:
     save_frequency: Optional[int] = None
     curriculum_dirs: Optional[List[str]] = None   # e.g., ["cluster_0","cluster_1","cluster_2","cluster_3"]
     curriculum_stage_epochs: Optional[List[int]] = None  # e.g., [10, 10, 10, 10]
+    run_quick_test: bool = False
     #wandb_name : Optional[str] = None
 
 def get_val_len(dm) -> int:
@@ -234,24 +235,60 @@ def load_config(path: str | os.PathLike) -> Config:
         raise ValueError(f"Unknown config keys: {sorted(unknown)}")
     return Config(**data)
 
-class EpochCumLogger(Callback):
-    def __init__(self, offset=0):
+class LogCumulativeEpoch(Callback):
+    """Re-log metrics to W&B with a continuous epoch counter across stages."""
+    def __init__(self, offset: int = 0):
+        super().__init__()
         self.offset = offset
-    def on_train_epoch_end(self, trainer, pl_module):
-        epoch_cum = self.offset + trainer.current_epoch + 1  # 1-based display
-        # Log to W&B with a custom step aligned to epoch_cum
+        self._defined = False
+
+    def _epoch_cum(self, trainer):
+        # 1-based display; change to +0 if you prefer 0-based
+        return int(self.offset + trainer.current_epoch + 1)
+
+    def _define_metrics_once(self, trainer):
+        if self._defined:
+            return
         if isinstance(trainer.logger, WandbLogger):
             wb = trainer.logger.experiment
+            # Tell W&B that all charts should use epoch_cum as x-axis
             wb.define_metric("epoch_cum")
             wb.define_metric("*", step_metric="epoch_cum")
-            wb.log({"epoch_cum": epoch_cum}, commit=False)
+            self._defined = True
+
+    def _log_with_epoch_cum(self, trainer):
+        if not isinstance(trainer.logger, WandbLogger):
+            return
+        self._define_metrics_once(trainer)
+        epoch_cum = self._epoch_cum(trainer)
+
+        # Collect latest epoch-level metrics that Lightning aggregates for us
+        metrics = {}
+        for k, v in trainer.callback_metrics.items():
+            try:
+                metrics[k] = float(v.detach().cpu().item())  # tensors → float
+            except Exception:
+                try:
+                    metrics[k] = float(v)
+                except Exception:
+                    continue
+
+        # Also send epoch_cum itself; set step=epoch_cum so W&B aligns points
+        trainer.logger.log_metrics({**metrics, "epoch_cum": epoch_cum}, step=epoch_cum)
+
+    # Re-log at the end of train and validation epochs
+    def on_train_epoch_end(self, trainer, pl_module):
+        self._log_with_epoch_cum(trainer)
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        self._log_with_epoch_cum(trainer)
 
 def run_curriculum(args: Config):
     # fixed logger across stages (so weights carry in one process, logs grouped)
-    if args.logger == "wandb":
-        logger = WandbLogger(project="beat_this", name=args.name, config=vars(args))
-    else:
-        logger = None
+    # if args.logger == "wandb":
+    #     logger = WandbLogger(project="beat_this", name=args.name, config=vars(args))
+    # else:
+    #     logger = None
 
     # Create the model ONCE; keep weights across stages
     data_root0 = Path(args.data_path) / args.curriculum_dirs[0] / "data"
@@ -303,7 +340,7 @@ def run_curriculum(args: Config):
                                      "epoch_offset": epoch_offset}) \
                  if args.logger == "wandb" else None
 
-        epoch_cum_cb = EpochCumLogger(offset=epoch_offset)
+        cum_epoch_cb = LogCumulativeEpoch(offset=epoch_offset)
         val_len = get_val_len(datamodule)
         print(f"[Stage {stage_idx}] Validation set size: {val_len}")
         # If you want stage-specific positive weights, update here (safe even if unchanged)
@@ -324,7 +361,7 @@ def run_curriculum(args: Config):
 
         callbacks = [
             LearningRateMonitor(logging_interval="step"),
-            epoch_cum_cb
+             cum_epoch_cb
             # ModelCheckpoint(
             #     dirpath=checkpoint_folder,
             #     filename="{epoch:02d}-valf{val_F_measure_beat:.4f}",
@@ -332,7 +369,7 @@ def run_curriculum(args: Config):
             #     every_n_epochs=every_n_epochs,
             # ),
         ]
-
+    
         # Fresh Trainer per stage (simplest way to bound stage epochs)
         trainer = Trainer(
             max_epochs=stage_epochs,
@@ -345,6 +382,11 @@ def run_curriculum(args: Config):
             precision="16-mixed",
             accumulate_grad_batches=args.accumulate_grad_batches,
             check_val_every_n_epoch=args.val_frequency,
+            fast_dev_run=1 if args.run_quick_test else False,      # 1 train/val/test batch total
+            limit_train_batches=1 if args.run_quick_test else 1.0, # can also use e.g. 0.01
+            limit_val_batches=1 if args.run_quick_test else 1.0,
+            limit_test_batches=1 if args.run_quick_test else 1.0,
+      
         )
 
         # Optional: quick val before training this stage (to log baseline)

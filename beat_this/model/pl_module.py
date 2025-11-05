@@ -38,7 +38,7 @@ class PLBeatThis(LightningModule):
         use_dbn=False,
         eval_trim_beats=5,
         sum_head=True,
-        partial_transformers=True,
+        partial_transformers=True
     ):
         super().__init__()
         self.save_hyperparameters()

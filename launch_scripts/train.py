@@ -1,9 +1,9 @@
 import argparse
 from pathlib import Path
-
+import math
 import torch
 from pytorch_lightning import Trainer, seed_everything
-from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
+from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint, Callback, EarlyStopping
 #from lightning.pytorch.callbacks import ModelSummary
 from pytorch_lightning.loggers import WandbLogger
 from torchinfo import summary
@@ -38,11 +38,14 @@ def freeze_by_prefix(module: nn.Module, prefixes):
             p.requires_grad = False
 
 def unfreeze_by_prefix(module: nn.Module, prefixes):
+    unfrozen_params = []
     if isinstance(prefixes, str):
         prefixes = [prefixes]
     for name, p in module.named_parameters():
         if any(name.startswith(pref) for pref in prefixes):
             p.requires_grad = True
+            unfrozen_params.append(p)
+    return unfrozen_params
 
 def set_bn_eval_by_prefix(module: nn.Module, prefixes):
     if isinstance(prefixes, str):
@@ -59,7 +62,65 @@ def freeze_layers(num_to_freeze, pl_model):
     freeze_by_prefix(pl_model, layers_to_freeze)
 
     set_bn_eval_by_prefix(pl_model, layers_to_freeze)
+
     #return pl_model
+class PlateauUnfreeze(Callback):
+    def __init__(self, monitor="val_f1", mode="max", patience=1,  lr_backbone=1e-5):
+        super().__init__()
+        self.monitor = monitor
+        self.mode = mode
+        self.patience = patience
+        #self.get_blocks_fn = get_blocks_fn
+        self.lr_backbone = lr_backbone
+        self.best = -float("inf") if mode=="max" else float("inf")
+        self.bad_epochs = 0
+        self._num_unfrozen = 0
+        self._layers = None
+
+    def on_fit_start(self, trainer, pl_module):
+        # Discover your exact stack once:
+        # model.transformer_blocks._orig_mod.layers is a ModuleList
+        self._layers = list(pl_module.model.transformer_blocks._orig_mod.layers)
+        self._report_trainable(pl_module, prefix=" (start)")
+    
+    def _report_trainable(self, pl_module, prefix=""):
+        total = sum(p.numel() for p in pl_module.parameters())
+        trainable = sum(p.numel() for p in pl_module.parameters() if p.requires_grad)
+        print(f"[PlateauUnfreeze]{prefix} Trainable: {trainable:,} / {total:,} ({100*trainable/total:.2f}%)")
+
+    def on_validation_end(self, trainer, pl_module):
+        metrics = trainer.callback_metrics
+        if self.monitor not in metrics:
+            return
+        current = metrics[self.monitor].item()
+
+        improved = (current > self.best) if self.mode=="max" else (current < self.best)
+        if improved:
+            self.best = current
+            self.bad_epochs = 0
+            return
+
+        self.bad_epochs += 1
+        if self.bad_epochs < self.patience:
+            return
+        #print("unfreezing new layers")
+        # Unfreeze next block
+        unfrozen = sum(any(p.requires_grad for p in L.parameters()) for L in self._layers)
+        next_idx = len(self._layers) - 1 - unfrozen
+        if next_idx < 0:
+            return  # nothing left to unfreeze
+        
+        prefix = f"model.transformer_blocks._orig_mod.layers.{next_idx}."
+        new_params = unfreeze_by_prefix(pl_module, prefix)
+        # if new_params:
+        #     trainer.optimizers[0].add_param_group({"params": new_params, "lr": self.lr_backbone})
+        self._num_unfrozen += 1
+        self.bad_epochs = 0
+        self._report_trainable(pl_module, prefix=f" (after unfreezing layer {next_idx})")
+        # trainer.logger.log_metrics({"unfrozen_blocks": self._num_unfrozen}, step=trainer.global_step)
+
+        # lr =trainer.optimizers[0].param_groups[0]["lr"]
+        # trainer.logger.log_metrics({"lr": lr}, step=trainer.global_step)
 
 @dataclass
 class Config:
@@ -80,6 +141,7 @@ class Config:
     loss: str = "shift_tolerant_weighted_bce"  # one of: shift_tolerant_weighted_bce, fast_shift_tolerant_weighted_bce, weighted_bce, bce
     warmup_steps: int = 1000
     max_epochs: int = 100
+    min_epochs: int = 20 
     batch_size: int = 8
     accumulate_grad_batches: int = 8
     train_length: int = 1500
@@ -102,6 +164,12 @@ class Config:
     resume_id :  Optional[str] = None
     freeze_layers: Optional[int] = None
     save_frequency: Optional[int] = None
+    use_early_stopping: bool = True           
+    es_monitor: str = "val_F-measure_beat"    
+    es_mode: str = "max"                      
+    es_patience: int = 10                    
+    es_min_delta: float = 0.001   
+     
     #wandb_name : Optional[str] = None
 
 
@@ -214,7 +282,7 @@ def main(args):
         use_dbn=args.dbn,
         eval_trim_beats=args.eval_trim_beats,
         sum_head=args.sum_head,
-        partial_transformers=args.partial_transformers,
+        partial_transformers=args.partial_transformers
     )
     #print(ModelSummary(model=pl_model, max_depth=2)) 
     print(summary(pl_model))
@@ -230,22 +298,54 @@ def main(args):
     checkpoint_folder = os.path.join(args.checkpoint_path, f"{args.name}S{args.seed}{params_str}".strip() )
     if args.save_frequency:
         save_top_k = -1
-        every_n_epochs=5
+        every_n_epochs=args.save_frequency
     else:
         save_top_k = 1
         every_n_epochs=args.val_frequency
-    callbacks.append(
+    if args.save_frequency:
+        periodic_ckpt_cb =(
         ModelCheckpoint(
-            dirpath=checkpoint_folder,
-            filename="{epoch:02d}-valf{val_F_measure_beat:.4f}",
-            save_top_k=save_top_k,
-            every_n_epochs=every_n_epochs,
-        )
-        
+                dirpath=os.path.join(checkpoint_folder, "periodic"),
+                filename="{epoch:02d}-valf{val_F-measure_beat:.4f}",
+                save_top_k=save_top_k,
+                every_n_epochs=every_n_epochs,
+            )
+         )
+        callbacks.append(periodic_ckpt_cb)
+            
+   
+    best_ckpt_cb = ModelCheckpoint(
+        dirpath=os.path.join(checkpoint_folder, "best"),
+        filename="best-{epoch:02d}-valf{val_F-measure_beat:.4f}",
+        monitor="val_F-measure_beat",
+        mode="max",
+        save_top_k=1,                   # keep only the best
+        save_last=False,                # optional; can set True if desired
     )
+    callbacks.append(best_ckpt_cb)
+    if args.use_early_stopping:
+        callbacks.append(
+            EarlyStopping(
+                monitor=args.es_monitor,    
+                mode=args.es_mode,       
+                patience=max(1, int(math.ceil(args.es_patience_epochs / args.val_frequency))),  
+                min_delta=args.es_min_delta, 
+                verbose=True
+            )
+        )
+    # callbacks.append(
+    # PlateauUnfreeze(
+    #     monitor="val_F-measure_beat",      # choose your metric name
+    #     mode="max",            # because higher F1 is better
+    #     patience=3,            # wait 3 bad epochs before unfreezing
+    #     #get_blocks_fn=get_blocks_fn,
+    #     lr_backbone=5e-5
+    # )
+    # )
     use_gpu = torch.cuda.is_available() 
     trainer = Trainer(
         max_epochs=args.max_epochs,
+        min_epochs=args.min_epochs,
         accelerator="gpu" if use_gpu else "cpu",
         devices=1 if use_gpu else 1, 
         num_sanity_val_steps=0,
@@ -277,7 +377,8 @@ def main(args):
         print(f"validating the model before")
         trainer.validate(pl_model, datamodule=datamodule)
     trainer.fit(pl_model, datamodule)
-    trainer.test(pl_model, datamodule)
+    trainer.test(pl_model, datamodule, ckpt_path="best")
+    #trainer.test(pl_model, datamodule)
 
 if __name__ == "__main__":
     cfg =load_config("launch_scripts/train_params.yaml")
