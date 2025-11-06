@@ -20,6 +20,7 @@ import yaml
 import torch.nn as nn
 import random
 import json
+from pathlib import Path
 import numpy as np
 
 def set_seed(seed=42):
@@ -171,8 +172,7 @@ class Config:
     es_mode: str = "max"                      
     es_patience: int = 10                    
     es_min_delta: float = 0.001   
-     
-    #wandb_name : Optional[str] = None
+    compute_metrics: bool =  False
 
 
 def _load_yaml_or_json(path: Path) -> dict:
@@ -196,9 +196,9 @@ def load_config(path: str | os.PathLike) -> Config:
     return Config(**data)
 
 
-def compute_predictions(model, trainer, predict_dataloader):
-    print("Computing predictions ...")
-    out = trainer.predict(model, predict_dataloader)
+def compute_predictions(model, trainer, predict_dataloader, checkpoint_name):
+    print("Computing predictions ...")#
+    out = trainer.predict(model, predict_dataloader, ckpt_path=checkpoint_name)
     metrics = [o[0] for o in out]
     dict_all_results = {out[i][3][0]: out[i][0] for i in range(len(out))}
     preds = [o[1] for o in out]
@@ -207,6 +207,32 @@ def compute_predictions(model, trainer, predict_dataloader):
     # convert metrics from list of per-batch dictionaries to a single dictionary with np arrays as values
     metrics = {k: np.asarray([m[k] for m in metrics]) for k in metrics[0]}
     return metrics, dataset, preds, piece, dict_all_results
+
+def compute_metrics(model, trainer, datamodule, checkpoint_name):
+    datamodule.setup("test")
+    metrics, dataset, preds, piece, dict_all_results = compute_predictions(
+            model, trainer, datamodule.test_dataloader(), checkpoint_name)
+       # save predictions to a json file
+    out_file_name =  Path(checkpoint_name).stem
+    test_scores_path = os.path.join("json_test_scores", f"{out_file_name}.json")
+    with open(test_scores_path, 'w') as fp:
+        json.dump(dict_all_results, fp)
+    averaged_metrics = {k: np.mean(v) for k, v in metrics.items()}
+    # compute metrics averaged by dataset
+    dataset_metrics = {
+        k: {d: np.mean(v[dataset == d]) for d in np.unique(dataset)}
+        for k, v in metrics.items()
+    }
+    # print for dataset
+    print("Metrics")
+    for k, v in averaged_metrics.items():
+        print(f"{k}: {v}")
+    print("Dataset metrics")
+    for k, v in dataset_metrics.items():
+        print(k)
+        for d, value in v.items():
+            print(f"{d}: {value}")
+        print("------")
 
 def rename_key(key: str, insert: str) -> str:
     parts = key.split(".")
@@ -223,8 +249,11 @@ def rename_best_checkpoint(best_ckpt_path,  key_fragment="_orig_mod"):
     old_sd = ckpt["state_dict"]
     new_sd = OrderedDict((rename_key(k, "_orig_mod"), v) for k, v in old_sd.items())
     ckpt["state_dict"] = new_sd
-    torch.save(ckpt, best_ckpt_path)  # overwrite in place
-    return best_ckpt_path
+    new_name = Path(best_ckpt_path).stem + "_orig.ckpt"
+    folder = os.path.dirname(best_ckpt_path)
+    new_path = os.path.join(folder, new_name )
+    torch.save(ckpt,new_path)  #
+    return new_path
 
 def main(args):
     # for repeatability
@@ -349,7 +378,7 @@ def main(args):
    
     best_ckpt_cb = ModelCheckpoint(
         dirpath=os.path.join(checkpoint_folder, "best"),
-        filename="best-{epoch:02d}-valf{val_F-measure_beat:.4f}",
+        filename=f"best-seed{args.seed}-{{epoch:02d}}-valf{{val_F_measure_beat:.4f}}",
         monitor="val_F-measure_beat",
         mode="max",
         save_top_k=1,                   # keep only the best
@@ -413,9 +442,12 @@ def main(args):
     best_path = best_ckpt_cb.best_model_path 
     print("Best checkpoint:", best_path)
     print(f"validating the model after")
-    rename_best_checkpoint(best_path)
-    trainer.validate(pl_model, datamodule=datamodule, ckpt_path=best_path)
-    trainer.test(pl_model, datamodule, ckpt_path =best_path)
+    # rename some weights for error-free processing
+    new_best_path = rename_best_checkpoint(best_path)
+    trainer.validate(pl_model, datamodule=datamodule, ckpt_path=new_best_path)
+    trainer.test(pl_model, datamodule, ckpt_path =new_best_path)
+    if args.compute_metrics:
+        compute_metrics(pl_model, trainer, datamodule, checkpoint_name = new_best_path)
         
 
     #trainer.test(pl_model, datamodule)
