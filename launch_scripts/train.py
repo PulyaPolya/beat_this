@@ -6,6 +6,7 @@ from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint, Callback, EarlyStopping
 #from lightning.pytorch.callbacks import ModelSummary
 from pytorch_lightning.loggers import WandbLogger
+from collections import OrderedDict
 from torchinfo import summary
 import sys
 import os
@@ -18,6 +19,7 @@ from beat_this.model.pl_module import PLBeatThis
 import yaml
 import torch.nn as nn
 import random
+import json
 import numpy as np
 
 def set_seed(seed=42):
@@ -194,6 +196,36 @@ def load_config(path: str | os.PathLike) -> Config:
     return Config(**data)
 
 
+def compute_predictions(model, trainer, predict_dataloader):
+    print("Computing predictions ...")
+    out = trainer.predict(model, predict_dataloader)
+    metrics = [o[0] for o in out]
+    dict_all_results = {out[i][3][0]: out[i][0] for i in range(len(out))}
+    preds = [o[1] for o in out]
+    dataset = np.asarray([o[2][0] for o in out])
+    piece = np.asarray([o[3][0] for o in out])
+    # convert metrics from list of per-batch dictionaries to a single dictionary with np arrays as values
+    metrics = {k: np.asarray([m[k] for m in metrics]) for k in metrics[0]}
+    return metrics, dataset, preds, piece, dict_all_results
+
+def rename_key(key: str, insert: str) -> str:
+    parts = key.split(".")
+    if len(parts) > 2:
+        parts.insert(2, insert)   # insert after the 2nd dot
+    return ".".join(parts) 
+
+def rename_best_checkpoint(best_ckpt_path,  key_fragment="_orig_mod"):
+    ckpt = torch.load(best_ckpt_path, map_location="cpu")
+    sd = ckpt.get("state_dict", None)
+    if sd is None:
+        raise KeyError(f"'state_dict' not in checkpoint: {best_ckpt_path}")
+    #new_sd = OrderedDict((renamed(k), v) for k, v in sd.items())
+    old_sd = ckpt["state_dict"]
+    new_sd = OrderedDict((rename_key(k, "_orig_mod"), v) for k, v in old_sd.items())
+    ckpt["state_dict"] = new_sd
+    torch.save(ckpt, best_ckpt_path)  # overwrite in place
+    return best_ckpt_path
+
 def main(args):
     # for repeatability
     seed_everything(args.seed, workers=True)
@@ -308,6 +340,7 @@ def main(args):
                 dirpath=os.path.join(checkpoint_folder, "periodic"),
                 filename="{epoch:02d}-valf{val_F-measure_beat:.4f}",
                 save_top_k=save_top_k,
+                monitor=None,
                 every_n_epochs=every_n_epochs,
             )
          )
@@ -328,7 +361,7 @@ def main(args):
             EarlyStopping(
                 monitor=args.es_monitor,    
                 mode=args.es_mode,       
-                patience=max(1, int(math.ceil(args.es_patience_epochs / args.val_frequency))),  
+                patience=max(1, int(math.ceil(args.es_patience / args.val_frequency))),  
                 min_delta=args.es_min_delta, 
                 verbose=True
             )
@@ -374,10 +407,17 @@ def main(args):
             trainable = sum(p.numel() for p in pl_model.parameters() if p.requires_grad)
             print(f"Trainable: {trainable:,} / {total:,}")
     
-        print(f"validating the model before")
-        trainer.validate(pl_model, datamodule=datamodule)
+    #print(f"validating the model before")
+   # trainer.validate(pl_model, datamodule=datamodule)
     trainer.fit(pl_model, datamodule)
-    trainer.test(pl_model, datamodule, ckpt_path="best")
+    best_path = best_ckpt_cb.best_model_path 
+    print("Best checkpoint:", best_path)
+    print(f"validating the model after")
+    rename_best_checkpoint(best_path)
+    trainer.validate(pl_model, datamodule=datamodule, ckpt_path=best_path)
+    trainer.test(pl_model, datamodule, ckpt_path =best_path)
+        
+
     #trainer.test(pl_model, datamodule)
 
 if __name__ == "__main__":
