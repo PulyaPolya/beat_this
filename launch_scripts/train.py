@@ -29,9 +29,9 @@ def set_seed(seed=42):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
-    # For full reproducibility
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+    # # For full reproducibility
+    # torch.backends.cudnn.deterministic = True
+    # torch.backends.cudnn.benchmark = False
 
 def freeze_by_prefix(module: nn.Module, prefixes):
     if isinstance(prefixes, str):
@@ -378,7 +378,7 @@ def main(args):
    
     best_ckpt_cb = ModelCheckpoint(
         dirpath=os.path.join(checkpoint_folder, "best"),
-        filename=f"best-seed{args.seed}-{{epoch:02d}}-valf{{val_F_measure_beat:.4f}}",
+        filename=f"best-seed{args.seed}-{{epoch:02d}}-valf{{val_F-measure_beat:.4f}}",
         monitor="val_F-measure_beat",
         mode="max",
         save_top_k=1,                   # keep only the best

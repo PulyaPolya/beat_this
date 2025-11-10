@@ -10,7 +10,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 from beat_this.dataset import BeatDataModule
 from beat_this.inference import load_checkpoint
 from beat_this.model.pl_module import PLBeatThis
+from collections import OrderedDict
 import json
+import torch
+from pathlib import Path
 
 # for repeatability
 seed_everything(0, workers=True)
@@ -33,10 +36,10 @@ def main(args):
         metrics, dataset, preds, piece, dict_all_results = compute_predictions(
             model, trainer, datamodule.predict_dataloader()
         )
-        #print(metrics)
-        # compute averaged metrics
-        #print(dict_all_results)
-        with open('test_scores.json', 'w') as fp:
+       # save predictions to a json file
+        out_file_name =  Path(args.models[0]).stem
+        test_scores_path = os.path.join("json_test_scores", f"{out_file_name}.json")
+        with open(test_scores_path, 'w') as fp:
             json.dump(dict_all_results, fp)
         averaged_metrics = {k: np.mean(v) for k, v in metrics.items()}
         # compute metrics averaged by dataset
