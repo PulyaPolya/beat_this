@@ -50,6 +50,7 @@ def unfreeze_by_prefix(module: nn.Module, prefixes):
             unfrozen_params.append(p)
     return unfrozen_params
 
+
 def set_bn_eval_by_prefix(module: nn.Module, prefixes):
     if isinstance(prefixes, str):
         prefixes = [prefixes]
@@ -163,16 +164,17 @@ class Config:
     seed: int = 0
     data_path : str = "data"
     checkpoint_path : str = "data"
-    resume_checkpoint: Optional[str] = None
+    resume_checkpoint: bool = False
     resume_id :  Optional[str] = None
+    ckpt_epoch : Optional[int] = None
+    checkpoints_folder: Optional[str] = None
     freeze_layers: Optional[int] = None
     save_frequency: Optional[int] = None
-    use_early_stopping: bool = True           
-    es_monitor: str = "val_F-measure_beat"    
-    es_mode: str = "max"                      
+    use_early_stopping: bool = True                              
     es_patience: int = 10                    
     es_min_delta: float = 0.001   
     compute_metrics: bool =  False
+    full_data : bool = False
 
 
 def _load_yaml_or_json(path: Path) -> dict:
@@ -208,15 +210,22 @@ def compute_predictions(model, trainer, predict_dataloader, checkpoint_name):
     metrics = {k: np.asarray([m[k] for m in metrics]) for k in metrics[0]}
     return metrics, dataset, preds, piece, dict_all_results
 
-def compute_metrics(model, trainer, datamodule, checkpoint_name):
+def compute_metrics(model, trainer, datamodule, checkpoint_name, save_predictions = False, cluster_info = None):
     datamodule.setup("test")
     metrics, dataset, preds, piece, dict_all_results = compute_predictions(
             model, trainer, datamodule.test_dataloader(), checkpoint_name)
        # save predictions to a json file
-    out_file_name =  Path(checkpoint_name).stem
-    test_scores_path = os.path.join("json_test_scores", f"{out_file_name}.json")
-    with open(test_scores_path, 'w') as fp:
-        json.dump(dict_all_results, fp)
+    if save_predictions:
+        out_file_name =  Path(checkpoint_name).stem
+        if cluster_info:
+            save_path = os.path.join("json_test_scores", cluster_info[0],cluster_info[1])
+            os.makedirs(save_path, exist_ok = True)
+            test_scores_path = os.path.join(save_path, f"{out_file_name}.json")
+        else:
+            test_scores_path = os.path.join("json_test_scores", f"{out_file_name}.json")
+            
+        with open(test_scores_path, 'w') as fp:
+            json.dump(dict_all_results, fp)
     averaged_metrics = {k: np.mean(v) for k, v in metrics.items()}
     # compute metrics averaged by dataset
     dataset_metrics = {
@@ -234,33 +243,48 @@ def compute_metrics(model, trainer, datamodule, checkpoint_name):
             print(f"{d}: {value}")
         print("------")
 
+def load_checkpoint(seed_folder, epoch= 100):
+    epoch = epoch -1
+    periodic_folder = os.path.join(seed_folder, "periodic")
+    checkpoint = [check for check in os.listdir(periodic_folder) if f"{epoch:02d}" in check][0]
+    checkpoint_path = os.path.join(periodic_folder, checkpoint)
+    print(f"loaing checkpoint from the path {checkpoint_path}")
+    checkpoint_name = Path(checkpoint_path).stem
+    if not checkpoint_name.endswith("_orig"):
+        ckpt = rename_best_checkpoint(checkpoint_path,  save = False)
+    else:
+        ckpt = torch.load(checkpoint_path, map_location="cpu")
+    return ckpt
+
 def rename_key(key: str, insert: str) -> str:
     parts = key.split(".")
     if len(parts) > 2:
         parts.insert(2, insert)   # insert after the 2nd dot
     return ".".join(parts) 
 
-def rename_best_checkpoint(best_ckpt_path,  key_fragment="_orig_mod"):
+def rename_best_checkpoint(best_ckpt_path,  key_fragment="_orig_mod", save = True):
     ckpt = torch.load(best_ckpt_path, map_location="cpu")
     sd = ckpt.get("state_dict", None)
     if sd is None:
         raise KeyError(f"'state_dict' not in checkpoint: {best_ckpt_path}")
-    #new_sd = OrderedDict((renamed(k), v) for k, v in sd.items())
     old_sd = ckpt["state_dict"]
     new_sd = OrderedDict((rename_key(k, "_orig_mod"), v) for k, v in old_sd.items())
     ckpt["state_dict"] = new_sd
     new_name = Path(best_ckpt_path).stem + "_orig.ckpt"
     folder = os.path.dirname(best_ckpt_path)
     new_path = os.path.join(folder, new_name )
-    torch.save(ckpt,new_path)  #
-    return new_path
+    if save:
+        torch.save(ckpt,new_path)  #
+        return new_path
+    else:
+        return ckpt
 
 def main(args):
-    # for repeatability
+    # for raepeatability
     seed_everything(args.seed, workers=True)
     set_seed(args.seed)
 
-    print("Starting a new run with the following parameters:")
+    print("Starting  new run with the following parameters:")
     print(args)
 
     params_str = f"{'noval ' if not args.val else ''}{'hung ' if args.hung_data else ''}{'fold' + str(args.fold) + ' ' if args.fold is not None else ''}{args.loss}-h{args.transformer_dim}-aug{args.tempo_augmentation}{args.pitch_augmentation}{args.mask_augmentation}{' nosumH ' if not args.sum_head else ''}{' nopartialT ' if not args.partial_transformers else ''}"
@@ -356,7 +380,12 @@ def main(args):
 
     callbacks = [LearningRateMonitor(logging_interval="step")]
     # save every 5 epochs
-    checkpoint_folder = os.path.join(args.checkpoint_path, f"{args.name}S{args.seed}{params_str}".strip() )
+    if args.full_data:
+        checkpoint_folder = os.path.join(args.checkpoint_path, f"{args.name}S{args.seed}{params_str}".strip() )
+    else:
+        data_path_parts = args.data_path.split(os.sep)
+        cluster_info = data_path_parts[-2:]
+        checkpoint_folder = os.path.join(args.checkpoint_path,cluster_info[0], cluster_info[1], f"{args.name}S{args.seed}{params_str}".strip() )
     if args.save_frequency:
         save_top_k = -1
         every_n_epochs=args.save_frequency
@@ -388,8 +417,8 @@ def main(args):
     if args.use_early_stopping:
         callbacks.append(
             EarlyStopping(
-                monitor=args.es_monitor,    
-                mode=args.es_mode,       
+                monitor="val_F-measure_beat",    
+                mode="max",       
                 patience=max(1, int(math.ceil(args.es_patience / args.val_frequency))),  
                 min_delta=args.es_min_delta, 
                 verbose=True
@@ -419,17 +448,19 @@ def main(args):
         check_val_every_n_epoch=args.val_frequency,
     )
     if args.resume_checkpoint:
-        ckpt = torch.load(args.resume_checkpoint, map_location="cpu")
 
+        #ckpt = torch.load(args.resume_checkpoint, map_location="cpu")
+        
         param_name = "model.frontend.stem.bn1d.weight" # pick any key from your model
         before = pl_model.state_dict()[param_name].clone()
         # Load weights
-        ckpt = torch.load(args.resume_checkpoint, map_location="cpu")
+        ckpt = load_checkpoint(seed_folder=args.checkpoints_folder, epoch=args.ckpt_epoch)
         missing, unexpected = pl_model.load_state_dict(ckpt["state_dict"], strict=False)
         print("Loaded weights. Missing:", missing)
         print("Unexpected:", unexpected)
         after = pl_model.state_dict()[param_name]
         print("Are weights identical?", torch.equal(before, after))
+
         if args.freeze_layers:
             freeze_layers(args.freeze_layers, pl_model)
             total = sum(p.numel() for p in pl_model.parameters())
@@ -445,9 +476,10 @@ def main(args):
     # rename some weights for error-free processing
     new_best_path = rename_best_checkpoint(best_path)
     trainer.validate(pl_model, datamodule=datamodule, ckpt_path=new_best_path)
-    trainer.test(pl_model, datamodule, ckpt_path =new_best_path)
+    #trainer.test(pl_model, datamodule, ckpt_path =new_best_path)
     if args.compute_metrics:
-        compute_metrics(pl_model, trainer, datamodule, checkpoint_name = new_best_path)
+        cluster_info = None if args.full_data else cluster_info
+        compute_metrics(pl_model, trainer, datamodule, checkpoint_name = new_best_path, save_predictions= True, cluster_info= cluster_info)
         
 
     #trainer.test(pl_model, datamodule)
