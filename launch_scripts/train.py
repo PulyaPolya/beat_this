@@ -174,7 +174,9 @@ class Config:
     es_patience: int = 10                    
     es_min_delta: float = 0.001   
     compute_metrics: bool =  False
-    full_data : bool = False
+    #full_data : bool = False
+    cluster_number : Optional[int]  = 0
+    clustering_config: Optional[str] = None
 
 
 def _load_yaml_or_json(path: Path) -> dict:
@@ -210,20 +212,24 @@ def compute_predictions(model, trainer, predict_dataloader, checkpoint_name):
     metrics = {k: np.asarray([m[k] for m in metrics]) for k in metrics[0]}
     return metrics, dataset, preds, piece, dict_all_results
 
-def compute_metrics(model, trainer, datamodule, checkpoint_name, save_predictions = False, cluster_info = None):
-    datamodule.setup("test")
+def compute_metrics(model, trainer, datamodule, checkpoint_name, save_predictions = False, cluster_info = None, setup = "test"):
+    datamodule.setup(setup)
+    if setup == "test":
+        dataloader = datamodule.test_dataloader()
+    else:
+        dataloader  = datamodule.val_dataloader()
     metrics, dataset, preds, piece, dict_all_results = compute_predictions(
-            model, trainer, datamodule.test_dataloader(), checkpoint_name)
+            model, trainer, dataloader, checkpoint_name)
        # save predictions to a json file
     if save_predictions:
         out_file_name =  Path(checkpoint_name).stem
         if cluster_info:
-            save_path = os.path.join("json_test_scores", cluster_info[0],cluster_info[1])
+            save_path = os.path.join(f"json_{setup}_scores", cluster_info[0],cluster_info[1])
             os.makedirs(save_path, exist_ok = True)
             test_scores_path = os.path.join(save_path, f"{out_file_name}.json")
         else:
-            test_scores_path = os.path.join("json_test_scores", f"{out_file_name}.json")
-            
+            test_scores_path = os.path.join(f"json_{setup}_scores", f"{out_file_name}.json")
+
         with open(test_scores_path, 'w') as fp:
             json.dump(dict_all_results, fp)
     averaged_metrics = {k: np.mean(v) for k, v in metrics.items()}
@@ -243,8 +249,9 @@ def compute_metrics(model, trainer, datamodule, checkpoint_name, save_prediction
             print(f"{d}: {value}")
         print("------")
 
-def load_checkpoint(seed_folder, epoch= 100):
+def load_checkpoint(seed_folder, seed, epoch= 100):
     epoch = epoch -1
+    seed_folder = seed_folder.replace("_SEED_", str(seed))
     periodic_folder = os.path.join(seed_folder, "periodic")
     checkpoint = [check for check in os.listdir(periodic_folder) if f"{epoch:02d}" in check][0]
     checkpoint_path = os.path.join(periodic_folder, checkpoint)
@@ -280,7 +287,7 @@ def rename_best_checkpoint(best_ckpt_path,  key_fragment="_orig_mod", save = Tru
         return ckpt
 
 def main(args):
-    # for raepeatability
+    # for repeatability
     seed_everything(args.seed, workers=True)
     set_seed(args.seed)
 
@@ -289,12 +296,14 @@ def main(args):
 
     params_str = f"{'noval ' if not args.val else ''}{'hung ' if args.hung_data else ''}{'fold' + str(args.fold) + ' ' if args.fold is not None else ''}{args.loss}-h{args.transformer_dim}-aug{args.tempo_augmentation}{args.pitch_augmentation}{args.mask_augmentation}{' nosumH ' if not args.sum_head else ''}{' nopartialT ' if not args.partial_transformers else ''}"
     if args.logger == "wandb":
-        if args.resume_checkpoint and args.resume_id:
-            wandb_args = dict(id=args.resume_id, resume="must")
+        if args.resume_checkpoint:
+            #wandb_args = dict(id=args.resume_id, resume="must")
+            group = args.clustering_config
         else:
-            wandb_args = {}
+            #wandb_args = {}
+            group = None
         logger = WandbLogger(
-            project="beat_this", name=args.name, config = vars(args), **wandb_args
+            project="beat_this", name=args.name, group = group, config = vars(args)
         )
     else:
         logger = None
@@ -304,8 +313,11 @@ def main(args):
         torch.backends.cuda.enable_flash_sdp(True)
         torch.backends.cuda.enable_mem_efficient_sdp(False)
         torch.backends.cuda.enable_math_sdp(False)
-
-    data_dir =Path(args.data_path) / "data" #Path(__file__).parent.parent.relative_to(Path.cwd()) / "data"
+    if args.cluster_number:
+        print(f"Using data from cluster number {args.cluster_number}")
+        data_dir =Path(os.path.join(args.data_path, args.clustering_config, f"cluster_{args.cluster_number}")) / "data" #Path(__file__).parent.parent.relative_to(Path.cwd()) / "data"
+    else:
+        data_dir =Path(args.data_path) / "data" 
     print(data_dir)
     
     #checkpoint_dir = Path(args.checkpoint_path) 
@@ -380,11 +392,11 @@ def main(args):
 
     callbacks = [LearningRateMonitor(logging_interval="step")]
     # save every 5 epochs
-    if args.full_data:
+    if not args.cluster_number: #args.full_data:
         checkpoint_folder = os.path.join(args.checkpoint_path, f"{args.name}S{args.seed}{params_str}".strip() )
     else:
-        data_path_parts = args.data_path.split(os.sep)
-        cluster_info = data_path_parts[-2:]
+        #data_path_parts = args.data_path.split(os.sep)
+        cluster_info = [args.clustering_config, str(args.cluster_number)]
         checkpoint_folder = os.path.join(args.checkpoint_path,cluster_info[0], cluster_info[1], f"{args.name}S{args.seed}{params_str}".strip() )
     if args.save_frequency:
         save_top_k = -1
@@ -454,7 +466,7 @@ def main(args):
         param_name = "model.frontend.stem.bn1d.weight" # pick any key from your model
         before = pl_model.state_dict()[param_name].clone()
         # Load weights
-        ckpt = load_checkpoint(seed_folder=args.checkpoints_folder, epoch=args.ckpt_epoch)
+        ckpt = load_checkpoint(seed_folder=args.checkpoints_folder, seed=args.seed, epoch=args.ckpt_epoch)
         missing, unexpected = pl_model.load_state_dict(ckpt["state_dict"], strict=False)
         print("Loaded weights. Missing:", missing)
         print("Unexpected:", unexpected)
@@ -467,8 +479,8 @@ def main(args):
             trainable = sum(p.numel() for p in pl_model.parameters() if p.requires_grad)
             print(f"Trainable: {trainable:,} / {total:,}")
     
-    #print(f"validating the model before")
-   # trainer.validate(pl_model, datamodule=datamodule)
+        # print(f"validating the model before")    # uncomment  for real runs!!!!
+        # trainer.validate(pl_model, datamodule=datamodule )
     trainer.fit(pl_model, datamodule)
     best_path = best_ckpt_cb.best_model_path 
     print("Best checkpoint:", best_path)
@@ -476,10 +488,11 @@ def main(args):
     # rename some weights for error-free processing
     new_best_path = rename_best_checkpoint(best_path)
     trainer.validate(pl_model, datamodule=datamodule, ckpt_path=new_best_path)
+    cluster_info = None if not args.cluster_number else cluster_info
+    compute_metrics(pl_model, trainer, datamodule, checkpoint_name = new_best_path, save_predictions= True, cluster_info= cluster_info, setup="val")
     #trainer.test(pl_model, datamodule, ckpt_path =new_best_path)
     if args.compute_metrics:
-        cluster_info = None if args.full_data else cluster_info
-        compute_metrics(pl_model, trainer, datamodule, checkpoint_name = new_best_path, save_predictions= True, cluster_info= cluster_info)
+        compute_metrics(pl_model, trainer, datamodule, checkpoint_name = new_best_path, save_predictions= True, cluster_info= cluster_info, setup="test")
         
 
     #trainer.test(pl_model, datamodule)
