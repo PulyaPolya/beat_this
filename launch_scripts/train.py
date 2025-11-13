@@ -22,6 +22,7 @@ import random
 import json
 from pathlib import Path
 import numpy as np
+from beat_this.inference import load_checkpoint
 
 def set_seed(seed=42):
     random.seed(seed)
@@ -212,23 +213,27 @@ def compute_predictions(model, trainer, predict_dataloader, checkpoint_name):
     metrics = {k: np.asarray([m[k] for m in metrics]) for k in metrics[0]}
     return metrics, dataset, preds, piece, dict_all_results
 
-def compute_metrics(model, trainer, datamodule, checkpoint_name, save_predictions = False, cluster_info = None, setup = "test"):
-    datamodule.setup(setup)
-    if setup == "test":
-        dataloader = datamodule.test_dataloader()
-    else:
-        dataloader  = datamodule.val_dataloader()
+def compute_metrics(model, trainer, checkpoint_name, data_dir, save_predictions = False, cluster_info = None, datasplit = "test", num_workers=16):
+    checkpoint = load_checkpoint(checkpoint_name)
+    datamodule_hparams =  checkpoint["datamodule_hyper_parameters"]
+    # update the hparams with the ones from the arguments
+
+    datamodule_hparams["num_workers"] = num_workers
+    datamodule_hparams["predict_datasplit"] = datasplit
+    datamodule_hparams["data_dir"] = data_dir
+    datamodule = BeatDataModule(**datamodule_hparams)
+    datamodule.setup(stage="predict")
     metrics, dataset, preds, piece, dict_all_results = compute_predictions(
-            model, trainer, dataloader, checkpoint_name)
+            model, trainer, datamodule.predict_dataloader(), checkpoint_name)
        # save predictions to a json file
     if save_predictions:
         out_file_name =  Path(checkpoint_name).stem
         if cluster_info:
-            save_path = os.path.join(f"json_{setup}_scores", cluster_info[0],cluster_info[1])
+            save_path = os.path.join(f"json_{datasplit}_scores", cluster_info[0],cluster_info[1])
             os.makedirs(save_path, exist_ok = True)
             test_scores_path = os.path.join(save_path, f"{out_file_name}.json")
         else:
-            test_scores_path = os.path.join(f"json_{setup}_scores", f"{out_file_name}.json")
+            test_scores_path = os.path.join(f"json_{datasplit}_scores", f"{out_file_name}.json")
 
         with open(test_scores_path, 'w') as fp:
             json.dump(dict_all_results, fp)
@@ -249,7 +254,7 @@ def compute_metrics(model, trainer, datamodule, checkpoint_name, save_prediction
             print(f"{d}: {value}")
         print("------")
 
-def load_checkpoint(seed_folder, seed, epoch= 100):
+def load_checkpoint_resume(seed_folder, seed, epoch= 100):
     epoch = epoch -1
     seed_folder = seed_folder.replace("_SEED_", str(seed))
     periodic_folder = os.path.join(seed_folder, "periodic")
@@ -466,7 +471,7 @@ def main(args):
         param_name = "model.frontend.stem.bn1d.weight" # pick any key from your model
         before = pl_model.state_dict()[param_name].clone()
         # Load weights
-        ckpt = load_checkpoint(seed_folder=args.checkpoints_folder, seed=args.seed, epoch=args.ckpt_epoch)
+        ckpt = load_checkpoint_resume(seed_folder=args.checkpoints_folder, seed=args.seed, epoch=args.ckpt_epoch)
         missing, unexpected = pl_model.load_state_dict(ckpt["state_dict"], strict=False)
         print("Loaded weights. Missing:", missing)
         print("Unexpected:", unexpected)
@@ -479,8 +484,8 @@ def main(args):
             trainable = sum(p.numel() for p in pl_model.parameters() if p.requires_grad)
             print(f"Trainable: {trainable:,} / {total:,}")
     
-        # print(f"validating the model before")    # uncomment  for real runs!!!!
-        # trainer.validate(pl_model, datamodule=datamodule )
+        print(f"validating the model before")    # uncomment  for real runs!!!!
+        trainer.validate(pl_model, datamodule=datamodule )
     trainer.fit(pl_model, datamodule)
     best_path = best_ckpt_cb.best_model_path 
     print("Best checkpoint:", best_path)
@@ -489,7 +494,8 @@ def main(args):
     new_best_path = rename_best_checkpoint(best_path)
     trainer.validate(pl_model, datamodule=datamodule, ckpt_path=new_best_path)
     cluster_info = None if not args.cluster_number else cluster_info
-    compute_metrics(pl_model, trainer, datamodule, checkpoint_name = new_best_path, save_predictions= True, cluster_info= cluster_info, setup="val")
+    compute_metrics(pl_model, trainer, checkpoint_name = new_best_path, data_dir = data_dir, save_predictions = True, cluster_info = cluster_info, datasplit = "val", num_workers=args.num_workers)
+    #compute_metrics(pl_model, trainer, datamodule, checkpoint_name = new_best_path, save_predictions= True, cluster_info= cluster_info, setup="val")
     #trainer.test(pl_model, datamodule, ckpt_path =new_best_path)
     if args.compute_metrics:
         compute_metrics(pl_model, trainer, datamodule, checkpoint_name = new_best_path, save_predictions= True, cluster_info= cluster_info, setup="test")

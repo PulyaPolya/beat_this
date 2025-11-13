@@ -1,10 +1,10 @@
 {
-  "models": ["/hpcwork/ui556004/results/beat_this/checkpoints/full_data_intermediate_checkpointsS0shift_tolerant_weighted_bce-h512-augTrueTrueTrue/epoch=99-valfval_F_measure_beat=0.0000.ckpt"],
-  "datasplit": "test", 
+  "models": ["/hpcwork/ui556004/results/beat_this/checkpoints/clusters2_layer6/1/lr_attemptS0shift_tolerant_weighted_bce-h512-augTrueTrueTrue/best/best-seed0-epoch=01-valfval_F-measure_beat=0.9725.ckpt"],
+  "datasplit": "val", 
   "num_workers": 16,
   "eval_trim_beats": null,
   "dbn": null,
   "aggregation-type" : null,
   "gpu":0,
-  "data_path" :  "/hpcwork/ui556004/data/beat_this"
+  "data_path" :  "/hpcwork/ui556004/data/beat_this/clustering_configurations/clusters2_layer6/cluster_1"
 }
