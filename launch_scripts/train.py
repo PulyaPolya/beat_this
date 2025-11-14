@@ -146,7 +146,6 @@ class Config:
     loss: str = "shift_tolerant_weighted_bce"  # one of: shift_tolerant_weighted_bce, fast_shift_tolerant_weighted_bce, weighted_bce, bce
     warmup_steps: int = 1000
     max_epochs: int = 100
-    min_epochs: int = 20 
     batch_size: int = 8
     accumulate_grad_batches: int = 8
     train_length: int = 1500
@@ -167,7 +166,8 @@ class Config:
     checkpoint_path : str = "data"
     resume_checkpoint: bool = False
     resume_id :  Optional[str] = None
-    ckpt_epoch : Optional[int] = None
+    # when none take the best checkpoint for this seed, else take the periodic checkpoint at this epoch
+    ckpt_epoch : Optional[int] = None  # 
     checkpoints_folder: Optional[str] = None
     freeze_layers: Optional[int] = None
     save_frequency: Optional[int] = None
@@ -254,13 +254,17 @@ def compute_metrics(model, trainer, checkpoint_name, data_dir, save_predictions 
             print(f"{d}: {value}")
         print("------")
 
-def load_checkpoint_resume(seed_folder, seed, epoch= 100):
-    epoch = epoch -1
+def load_checkpoint_resume(seed_folder, seed, epoch= None):
     seed_folder = seed_folder.replace("_SEED_", str(seed))
-    periodic_folder = os.path.join(seed_folder, "periodic")
-    checkpoint = [check for check in os.listdir(periodic_folder) if f"{epoch:02d}" in check][0]
-    checkpoint_path = os.path.join(periodic_folder, checkpoint)
-    print(f"loaing checkpoint from the path {checkpoint_path}")
+    checkpoint_type = "best" if epoch == None else "periodic"
+    checkpoint_folder = os.path.join(seed_folder, checkpoint_type)
+    if checkpoint_type == "best":
+        checkpoint = [check for check in os.listdir(checkpoint_folder) if "orig" in check][0]
+    else:
+        epoch = epoch -1
+        checkpoint = [check for check in os.listdir(checkpoint_folder) if f"{epoch:02d}" in check][0]
+    checkpoint_path = os.path.join(checkpoint_folder, checkpoint)
+    print(f"Loading {checkpoint_type} checkpoint for seed {seed} from folder {seed_folder}  from the path {checkpoint_path}")
     checkpoint_name = Path(checkpoint_path).stem
     if not checkpoint_name.endswith("_orig"):
         ckpt = rename_best_checkpoint(checkpoint_path,  save = False)
@@ -453,7 +457,6 @@ def main(args):
     use_gpu = torch.cuda.is_available() 
     trainer = Trainer(
         max_epochs=args.max_epochs,
-        min_epochs=args.min_epochs,
         accelerator="gpu" if use_gpu else "cpu",
         devices=1 if use_gpu else 1, 
         num_sanity_val_steps=0,
