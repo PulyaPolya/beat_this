@@ -25,12 +25,13 @@ def main(args):
         # single model prediction
         checkpoint_path = args.models[0]
         checkpoint = load_checkpoint(checkpoint_path)
-
+        use_gpu = 0 if torch.cuda.is_available() and args.gpu >= 0 else -1
+        print(f"Using GPU: {use_gpu}")
         # create datamodule
         datamodule = datamodule_setup(checkpoint, args)
         # create model and trainer
         model, trainer = plmodel_setup(
-            checkpoint, args.eval_trim_beats, args.dbn, args.gpu
+            checkpoint, args.eval_trim_beats, args.dbn, use_gpu
         )
         # predict
         metrics, dataset, preds, piece, dict_all_results = compute_predictions(
@@ -38,7 +39,15 @@ def main(args):
         )
        # save predictions to a json file
         out_file_name =  Path(args.models[0]).stem
-        test_scores_path = os.path.join("json_test_scores", f"{out_file_name}.json")
+        if args.clustering_config is not None and args.cluster_number is not None:
+            save_path = os.path.join(f"json_{args.datasplit}_scores", args.clustering_config, f"cluster_{args.cluster_number}")
+        else:
+            save_path = os.path.join(f"json_{args.datasplit}_scores", "full_data")
+        os.makedirs(save_path, exist_ok = True)
+        test_scores_path = os.path.join(save_path, f"{out_file_name}.json")
+
+        # with open(test_scores_path, 'w') as fp:
+        # test_scores_path = os.path.join("json_test_scores", f"{out_file_name}.json")
         with open(test_scores_path, 'w') as fp:
             json.dump(dict_all_results, fp)
         averaged_metrics = {k: np.mean(v) for k, v in metrics.items()}
@@ -68,7 +77,7 @@ def main(args):
             for checkpoint_path in args.models:
                 checkpoint = load_checkpoint(checkpoint_path)
                 model, trainer = plmodel_setup(
-                    checkpoint, args.eval_trim_beats, args.dbn, args.gpu
+                    checkpoint, args.eval_trim_beats, args.dbn, use_gpu
                 )
 
                 metrics, dataset, preds, piece, dict_all_results = compute_predictions(
@@ -148,7 +157,11 @@ def main(args):
 def datamodule_setup(checkpoint, args):
     # Load the datamodule
     print("Creating datamodule")
-    data_dir = Path(args.data_path) / "data" #Path(__file__).parent.parent.relative_to(Path.cwd()) / "data"
+    if args.clustering_config is not None:
+        data_path = Path(args.data_path) / args.clustering_config / f"cluster_{args.cluster_number}"
+    else:
+        data_path = Path(args.data_path)
+    data_dir = data_path / "data" #Path(__file__).parent.parent.relative_to(Path.cwd()) / "data"
     datamodule_hparams = checkpoint["datamodule_hyper_parameters"]
     # update the hparams with the ones from the arguments
     if args.num_workers is not None:
