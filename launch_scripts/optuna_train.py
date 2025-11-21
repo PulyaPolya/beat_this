@@ -1,9 +1,10 @@
 import argparse
 from pathlib import Path
-import math
+
 import torch
 from pytorch_lightning import Trainer, seed_everything
-from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint, Callback, EarlyStopping
+from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint, Callback,  EarlyStopping
+import math
 #from lightning.pytorch.callbacks import ModelSummary
 from pytorch_lightning.loggers import WandbLogger
 from collections import OrderedDict
@@ -19,10 +20,9 @@ from beat_this.model.pl_module import PLBeatThis
 import yaml
 import torch.nn as nn
 import random
-import json
-from pathlib import Path
 import numpy as np
-from beat_this.inference import load_checkpoint
+import optuna
+import pickle
 
 def set_seed(seed=42):
     random.seed(seed)
@@ -137,8 +137,8 @@ class Config:
     transformer_dim: int = 512
     frontend_dropout: float = 0.1
     transformer_dropout: float = 0.2
-    lr: float = 8e-4
-    weight_decay: float = 0.01
+    #lr: float = 8e-4
+    #weight_decay: float = 0.01
     logger: str = "none"  # or "wandb"
     num_workers: int = 8
     n_heads: int = 16
@@ -146,7 +146,7 @@ class Config:
     loss: str = "shift_tolerant_weighted_bce"  # one of: shift_tolerant_weighted_bce, fast_shift_tolerant_weighted_bce, weighted_bce, bce
     warmup_steps: int = 1000
     max_epochs: int = 100
-    batch_size: int = 8
+    #batch_size: int = 8
     accumulate_grad_batches: int = 8
     train_length: int = 1500
     dbn: bool = False
@@ -178,82 +178,14 @@ class Config:
     #full_data : bool = False
     cluster_number : Optional[int]  = 0
     clustering_config: Optional[str] = None
-
+    num_trials : int = 1
+    sampler_path: Optional[str] = None
 
 def _load_yaml_or_json(path: Path) -> dict:
     raw = path.read_text()
     if path.suffix.lower() in (".yml", ".yaml"):
         data = yaml.safe_load(raw) or {}
     return data
-
-def load_config(path: str | os.PathLike) -> Config:
-    p = Path(path)
-    if not p.exists():
-        raise FileNotFoundError(f"Config file not found: {p}")
-    data = _load_yaml_or_json(p)
-    # allow hyphenated keys in file
-    data = {k.replace("-", "_"): v for k, v in data.items()}
-    # validate keys
-    valid = set(Config.__annotations__.keys())
-    unknown = set(data) - valid
-    if unknown:
-        raise ValueError(f"Unknown config keys: {sorted(unknown)}")
-    return Config(**data)
-
-
-def compute_predictions(model, trainer, predict_dataloader, checkpoint_name):
-    print("Computing predictions ...")#
-    out = trainer.predict(model, predict_dataloader, ckpt_path=checkpoint_name)
-    metrics = [o[0] for o in out]
-    dict_all_results = {out[i][3][0]: out[i][0] for i in range(len(out))}
-    preds = [o[1] for o in out]
-    dataset = np.asarray([o[2][0] for o in out])
-    piece = np.asarray([o[3][0] for o in out])
-    # convert metrics from list of per-batch dictionaries to a single dictionary with np arrays as values
-    metrics = {k: np.asarray([m[k] for m in metrics]) for k in metrics[0]}
-    return metrics, dataset, preds, piece, dict_all_results
-
-def compute_metrics(model, trainer, checkpoint_name, data_dir, save_predictions = False, cluster_info = None, datasplit = "test", num_workers=16):
-    checkpoint = load_checkpoint(checkpoint_name)
-    datamodule_hparams =  checkpoint["datamodule_hyper_parameters"]
-    # update the hparams with the ones from the arguments
-
-    datamodule_hparams["num_workers"] = num_workers
-    datamodule_hparams["predict_datasplit"] = datasplit
-    datamodule_hparams["data_dir"] = data_dir
-    datamodule = BeatDataModule(**datamodule_hparams)
-    datamodule.setup(stage="predict")compute_predictions
-    metrics, dataset, preds, piece, dict_all_results = (
-            model, trainer, datamodule.predict_dataloader(), checkpoint_name)
-       # save predictions to a json file
-    if save_predictions:
-        out_file_name =  Path(checkpoint_name).stem
-        if cluster_info:
-            save_path = os.path.join(f"json_{datasplit}_scores", cluster_info[0],cluster_info[1])
-            os.makedirs(save_path, exist_ok = True)
-            test_scores_path = os.path.join(save_path, f"{out_file_name}.json")
-        else:
-            test_scores_path = os.path.join(f"json_{datasplit}_scores", f"{out_file_name}.json")
-
-        with open(test_scores_path, 'w') as fp:
-            json.dump(dict_all_results, fp)
-    averaged_metrics = {k: np.mean(v) for k, v in metrics.items()}
-    # compute metrics averaged by dataset
-    dataset_metrics = {
-        k: {d: np.mean(v[dataset == d]) for d in np.unique(dataset)}
-        for k, v in metrics.items()
-    }
-    # print for dataset
-    print("Metrics")
-    for k, v in averaged_metrics.items():
-        print(f"{k}: {v}")
-    print("Dataset metrics")
-    for k, v in dataset_metrics.items():
-        print(k)
-        for d, value in v.items():
-            print(f"{d}: {value}")
-        print("------")
-
 def load_checkpoint_resume(seed_folder, seed, epoch= None):
     seed_folder = seed_folder.replace("_SEED_", str(seed))
     checkpoint_type = "best" if epoch == None else "periodic"
@@ -295,42 +227,28 @@ def rename_best_checkpoint(best_ckpt_path,  key_fragment="_orig_mod", save = Tru
     else:
         return ckpt
 
-def main(args):
-    # for repeatability
-    seed_everything(args.seed, workers=True)
-    set_seed(args.seed)
+def load_config(path: str | os.PathLike) -> Config:
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"Config file not found: {p}")
+    data = _load_yaml_or_json(p)
+    # allow hyphenated keys in file
+    data = {k.replace("-", "_"): v for k, v in data.items()}
+    # validate keys
+    valid = set(Config.__annotations__.keys())
+    unknown = set(data) - valid
+    if unknown:
+        raise ValueError(f"Unknown config keys: {sorted(unknown)}")
+    return Config(**data)
 
-    print("Starting  new run with the following parameters:")
-    print(args)
-
-    params_str = f"{'noval ' if not args.val else ''}{'hung ' if args.hung_data else ''}{'fold' + str(args.fold) + ' ' if args.fold is not None else ''}{args.loss}-h{args.transformer_dim}-aug{args.tempo_augmentation}{args.pitch_augmentation}{args.mask_augmentation}{' nosumH ' if not args.sum_head else ''}{' nopartialT ' if not args.partial_transformers else ''}"
-    if args.logger == "wandb":
-        if args.resume_checkpoint:
-            #wandb_args = dict(id=args.resume_id, resume="must")
-            group = args.clustering_config
-        else:
-            #wandb_args = {}
-            group = None
-        logger = WandbLogger(
-            project="beat_this", name=args.name, group = group, config = vars(args)
-        )
-    else:
-        logger = None
-
-    if args.force_flash_attention:
-        print("Forcing the use of the flash attention.")
-        torch.backends.cuda.enable_flash_sdp(True)
-        torch.backends.cuda.enable_mem_efficient_sdp(False)
-        torch.backends.cuda.enable_math_sdp(False)
+def objective(trial, args):
     if args.cluster_number:
         print(f"Using data from cluster number {args.cluster_number}")
         data_dir =Path(os.path.join(args.data_path, args.clustering_config, f"cluster_{args.cluster_number}")) / "data" #Path(__file__).parent.parent.relative_to(Path.cwd()) / "data"
     else:
         data_dir =Path(args.data_path) / "data" 
     print(data_dir)
-    
-    #checkpoint_dir = Path(args.checkpoint_path) 
-    #(Path(__file__).parent.parent.relative_to(Path.cwd()) / "checkpoints")
+
     augmentations = {}
     if args.tempo_augmentation:
         augmentations["tempo"] = {"min": -20, "max": 20, "stride": 4}
@@ -348,9 +266,12 @@ def main(args):
             "max_parts": 9,
         }
 
+    lr_hpo =  trial.suggest_float("lr", 1e-6, 8e-3, log = True) 
+    weight_decay_hpo = trial.suggest_float("weight_decay", 1e-4, 1e-1, log = True)
+    batch_size_hpo = trial.suggest_categorical ("batch_size", [2, 4, 8, 16, 32])
     datamodule = BeatDataModule(
         data_dir,
-        batch_size=args.batch_size,
+        batch_size=batch_size_hpo,#args.batch_size,
         train_length=args.train_length,
         spect_fps=args.fps,
         num_workers=args.num_workers,
@@ -362,6 +283,30 @@ def main(args):
         fold=args.fold,
     )
     datamodule.setup(stage="fit")
+    seed_everything(args.seed, workers=True)
+    set_seed(args.seed)
+    params = trial.params  # contains all current params *after suggestion*
+    print(f"\n=== Trial {trial.number} ===")
+    print("Parameters:", params)
+    
+   # warmup_steps_hpo = trial.suggest_categorical("warmup_steps", [100, 500, 1000])
+    # only attempt to freeze layers for the cluster models
+    if args.clustering_config:
+        freeze_layers_hpo = trial.suggest_int("freeze_layers", 0, 5 )
+    print("Starting a new run with the following parameters:")
+    print(args)
+
+    #params_str = f"{'noval ' if not args.val else ''}{'hung ' if args.hung_data else ''}{'fold' + str(args.fold) + ' ' if args.fold is not None else ''}{args.loss}-h{args.transformer_dim}-aug{args.tempo_augmentation}{args.pitch_augmentation}{args.mask_augmentation}{' nosumH ' if not args.sum_head else ''}{' nopartialT ' if not args.partial_transformers else ''}"
+    if args.logger == "wandb":
+        if args.resume_checkpoint and args.resume_id:
+            wandb_args = dict(id=args.resume_id, resume="must")
+        else:
+            wandb_args = {}
+        logger = WandbLogger(
+            project="beat_this", name=args.name, config = vars(args), **wandb_args
+        )
+    else:
+        logger = None
 
     # compute positive weights
     pos_weights = datamodule.get_train_positive_weights(widen_target_mask=3)
@@ -378,19 +323,18 @@ def main(args):
         n_layers=args.n_layers,
         stem_dim=32,
         dropout=dropout,
-        lr=args.lr,
-        weight_decay=args.weight_decay,
+        lr=lr_hpo,   #args.lr,
+        weight_decay= weight_decay_hpo,#args.weight_decay,
         pos_weights=pos_weights,
         head_dim=32,
         loss_type=args.loss,
-        warmup_steps=args.warmup_steps,
+        warmup_steps=args.warmup_steps, #args.warmup_steps,
         max_epochs=args.max_epochs,
         use_dbn=args.dbn,
         eval_trim_beats=args.eval_trim_beats,
         sum_head=args.sum_head,
         partial_transformers=args.partial_transformers
     )
-    #print(ModelSummary(model=pl_model, max_depth=2)) 
     print(summary(pl_model))
     for part in args.compile:
         if hasattr(pl_model.model, part):
@@ -400,41 +344,6 @@ def main(args):
             raise ValueError("The model is missing the part", part, "to compile")
 
     callbacks = [LearningRateMonitor(logging_interval="step")]
-    # save every 5 epochs
-    if not args.cluster_number: #args.full_data:
-        checkpoint_folder = os.path.join(args.checkpoint_path, f"{args.name}S{args.seed}{params_str}".strip() )
-    else:
-        #data_path_parts = args.data_path.split(os.sep)
-        cluster_info = [args.clustering_config, str(args.cluster_number)]
-        checkpoint_folder = os.path.join(args.checkpoint_path,cluster_info[0], cluster_info[1], f"{args.name}S{args.seed}{params_str}".strip() )
-    if args.save_frequency:
-        save_top_k = -1
-        every_n_epochs=args.save_frequency
-    else:
-        save_top_k = 1
-        every_n_epochs=args.val_frequency
-    if args.save_frequency:
-        periodic_ckpt_cb =(
-        ModelCheckpoint(
-                dirpath=os.path.join(checkpoint_folder, "periodic"),
-                filename="{epoch:02d}-valf{val_F-measure_beat:.4f}",
-                save_top_k=save_top_k,
-                monitor=None,
-                every_n_epochs=every_n_epochs,
-            )
-         )
-        callbacks.append(periodic_ckpt_cb)
-            
-   
-    best_ckpt_cb = ModelCheckpoint(
-        dirpath=os.path.join(checkpoint_folder, "best"),
-        filename=f"best-seed{args.seed}-{{epoch:02d}}-valf{{val_F-measure_beat:.4f}}",
-        monitor="val_F-measure_beat",
-        mode="max",
-        save_top_k=1,                   # keep only the best
-        save_last=False,                # optional; can set True if desired
-    )
-    callbacks.append(best_ckpt_cb)
     if args.use_early_stopping:
         callbacks.append(
             EarlyStopping(
@@ -467,6 +376,7 @@ def main(args):
         accumulate_grad_batches=args.accumulate_grad_batches,
         check_val_every_n_epoch=args.val_frequency,
     )
+    
     if args.resume_checkpoint:
 
         #ckpt = torch.load(args.resume_checkpoint, map_location="cpu")
@@ -481,33 +391,40 @@ def main(args):
         after = pl_model.state_dict()[param_name]
         print("Are weights identical?", torch.equal(before, after))
 
-        if args.freeze_layers:
-            freeze_layers(args.freeze_layers, pl_model)
+        if freeze_layers_hpo > 0:
+            freeze_layers(freeze_layers_hpo, pl_model)
             total = sum(p.numel() for p in pl_model.parameters())
             trainable = sum(p.numel() for p in pl_model.parameters() if p.requires_grad)
             print(f"Trainable: {trainable:,} / {total:,}")
-    
-        print(f"validating the model before")    # uncomment  for real runs!!!!
-        trainer.validate(pl_model, datamodule=datamodule )
-    trainer.fit(pl_model, datamodule)
-    best_path = best_ckpt_cb.best_model_path 
-    print("Best checkpoint:", best_path)
-    print(f"validating the model after")
-    # rename some weights for error-free processing
-    new_best_path = rename_best_checkpoint(best_path)
-    trainer.validate(pl_model, datamodule=datamodule, ckpt_path=new_best_path)
-    cluster_info = None if not args.cluster_number else cluster_info
-    compute_metrics(pl_model, trainer, checkpoint_name = new_best_path, data_dir = data_dir, save_predictions = True, cluster_info = cluster_info, datasplit = "val", num_workers=args.num_workers)
-    #compute_metrics(pl_model, trainer, datamodule, checkpoint_name = new_best_path, save_predictions= True, cluster_info= cluster_info, setup="val")
-    #trainer.test(pl_model, datamodule, ckpt_path =new_best_path)
-    if args.compute_metrics:
-        compute_metrics(pl_model, trainer, datamodule, checkpoint_name = new_best_path, save_predictions= True, cluster_info= cluster_info, setup="test")
-        
 
-    #trainer.test(pl_model, datamodule)
+    # print(f"validating the model before")
+    # trainer.validate(pl_model, datamodule=datamodule)
+    trainer.fit(pl_model, datamodule)
+    val_results = trainer.validate(pl_model, datamodule=datamodule)
+    return val_results[0]["val_F-measure_beat"]
+
+def main(args):
+    
+    pruner = optuna.pruners.MedianPruner(n_warmup_steps=0)
+    
+    if args.sampler_path:
+        sampler = pickle.load(open(args.sampler_path,  "rb"))
+    else:
+         sampler = optuna.samplers.TPESampler(seed=args.seed, 
+                                         multivariate=True,
+                                         warn_independent_sampling=False)
+    study = optuna.create_study(study_name=args.name,
+                                direction= "maximize",
+                                sampler = sampler,
+                                pruner = pruner,
+                                storage = "sqlite:///optuna.db",
+                                load_if_exists=True )
+    study.optimize(lambda trial: objective(trial, args), n_trials = args.num_trials)
+    with open(f"sampler_{args.optuna_name}.pkl", "wb") as fout:
+            pickle.dump(study.sampler, fout)
 
 if __name__ == "__main__":
-    cfg =load_config("launch_scripts/train_params.yaml")
+    cfg =load_config("launch_scripts/optuna_train_params.yaml")
    # args = parser.parse_args()
 
     main(cfg)
