@@ -266,9 +266,9 @@ def objective(trial, args):
             "max_parts": 9,
         }
 
-    lr_hpo =  trial.suggest_float("lr", 1e-6, 8e-3, log = True) 
+    lr_hpo =  trial.suggest_float("lr", 1e-5, 8e-3, log = True) 
     weight_decay_hpo = trial.suggest_float("weight_decay", 1e-4, 1e-1, log = True)
-    batch_size_hpo = trial.suggest_categorical ("batch_size", [2, 4, 8, 16, 32])
+    batch_size_hpo = trial.suggest_categorical ("batch_size", [ 4, 8, 16])
     datamodule = BeatDataModule(
         data_dir,
         batch_size=batch_size_hpo,#args.batch_size,
@@ -300,10 +300,12 @@ def objective(trial, args):
     if args.logger == "wandb":
         if args.resume_checkpoint and args.resume_id:
             wandb_args = dict(id=args.resume_id, resume="must")
+            
         else:
             wandb_args = {}
+        name = f"trial_{trial.number}"
         logger = WandbLogger(
-            project="beat_this", name=args.name, config = vars(args), **wandb_args
+            project="beat_this", group=args.name, name = name, config = vars(args), **wandb_args
         )
     else:
         logger = None
@@ -408,6 +410,7 @@ def main(args):
     pruner = optuna.pruners.MedianPruner(n_warmup_steps=0)
     
     if args.sampler_path:
+        print(f"Loading a sampler from path {args.sampler_path}")
         sampler = pickle.load(open(args.sampler_path,  "rb"))
     else:
          sampler = optuna.samplers.TPESampler(seed=args.seed, 
@@ -420,7 +423,7 @@ def main(args):
                                 storage = "sqlite:///optuna.db",
                                 load_if_exists=True )
     study.optimize(lambda trial: objective(trial, args), n_trials = args.num_trials)
-    with open(f"sampler_{args.optuna_name}.pkl", "wb") as fout:
+    with open(f"sampler_{args.name}.pkl", "wb") as fout:
             pickle.dump(study.sampler, fout)
 
 if __name__ == "__main__":
