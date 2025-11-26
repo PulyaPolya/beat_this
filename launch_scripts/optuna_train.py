@@ -22,6 +22,7 @@ import torch.nn as nn
 import random
 import numpy as np
 import optuna
+from optuna.integration import PyTorchLightningPruningCallback
 import pickle
 
 def set_seed(seed=42):
@@ -33,7 +34,20 @@ def set_seed(seed=42):
     # # For full reproducibility
     # torch.backends.cudnn.deterministic = True
     # torch.backends.cudnn.benchmark = False
-
+class OptunaPruningCallbackWrapper(Callback):
+    """Wrapper to ensure Optuna callback is properly recognized by Lightning"""
+    def __init__(self, trial, monitor):
+        super().__init__()
+        self.pruning_callback = PyTorchLightningPruningCallback(trial, monitor)
+    
+    def on_validation_end(self, trainer, pl_module):
+        self.pruning_callback.on_validation_end(trainer, pl_module)
+    
+    def state_dict(self):
+        return {}
+    
+    def load_state_dict(self, state_dict):
+        pass
 def freeze_by_prefix(module: nn.Module, prefixes):
     if isinstance(prefixes, str):
         prefixes = [prefixes]
@@ -171,7 +185,7 @@ class Config:
     checkpoints_folder: Optional[str] = None
     freeze_layers: Optional[int] = None
     save_frequency: Optional[int] = None
-    use_early_stopping: bool = True                              
+    use_early_stopping: bool = False                             
     es_patience: int = 10                    
     es_min_delta: float = 0.001   
     compute_metrics: bool =  False
@@ -346,6 +360,12 @@ def objective(trial, args):
             raise ValueError("The model is missing the part", part, "to compile")
 
     callbacks = [LearningRateMonitor(logging_interval="step")]
+    callbacks.append(
+        OptunaPruningCallbackWrapper(
+            trial=trial,
+            monitor="val_F-measure_beat",
+        )
+    )
     if args.use_early_stopping:
         callbacks.append(
             EarlyStopping(
@@ -403,11 +423,13 @@ def objective(trial, args):
     # trainer.validate(pl_model, datamodule=datamodule)
     trainer.fit(pl_model, datamodule)
     val_results = trainer.validate(pl_model, datamodule=datamodule)
+    if logger is not None:
+        logger.experiment.finish()
     return val_results[0]["val_F-measure_beat"]
 
 def main(args):
     
-    pruner = optuna.pruners.MedianPruner(n_warmup_steps=0)
+    pruner = optuna.pruners.MedianPruner(n_warmup_steps=0, n_startup_trials = 5)
     
     if args.sampler_path:
         print(f"Loading a sampler from path {args.sampler_path}")
