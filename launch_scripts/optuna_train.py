@@ -428,6 +428,7 @@ def objective(trial, args):
         precision="16-mixed",
         accumulate_grad_batches=args.accumulate_grad_batches,
         check_val_every_n_epoch=args.val_frequency,
+        enable_checkpointing=False
     )
     
     if args.resume_checkpoint:
@@ -469,8 +470,8 @@ def objective(trial, args):
             # for WandbLogger
             logger.experiment.finish()
 def main(args):
-    
-    pruner = optuna.pruners.MedianPruner(n_warmup_steps=0, n_startup_trials = 2)
+    # don't prune first 5 trials and wait 3 epochs to prune
+    pruner = optuna.pruners.MedianPruner(n_warmup_steps=0, n_startup_trials = 5, n_warmup_steps = 3)
     
     if args.sampler_path:
         print(f"Loading a sampler from path {args.sampler_path}")
@@ -483,7 +484,7 @@ def main(args):
                                 direction= "maximize",
                                 sampler = sampler,
                                 pruner = pruner,
-                                storage = "sqlite:///optuna.db",
+                                storage = "sqlite:///optuna_new.db",
                                 load_if_exists=True )
     study.optimize(lambda trial: objective(trial, args), n_trials = args.num_trials,  callbacks=[SaveSamplerCallback(f"sampler_{args.name}.pkl")])
     with open(f"sampler_{args.name}.pkl", "wb") as fout:
