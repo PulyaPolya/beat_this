@@ -38,16 +38,42 @@ class OptunaPruningCallbackWrapper(Callback):
     """Wrapper to ensure Optuna callback is properly recognized by Lightning"""
     def __init__(self, trial, monitor):
         super().__init__()
+        self.monitor = monitor
         self.pruning_callback = PyTorchLightningPruningCallback(trial, monitor)
     
     def on_validation_end(self, trainer, pl_module):
+        # DEBUG: Print available metrics
         self.pruning_callback.on_validation_end(trainer, pl_module)
+        print(f"\n=== Validation End (Epoch {trainer.current_epoch}) ===")
+        #print(f"Available metrics: {list(trainer.callback_metrics.keys())}")
+        if self.monitor in trainer.callback_metrics:
+            metric_value = trainer.callback_metrics[self.monitor].item()
+            print(f"Monitor metric '{self.monitor}' = {metric_value}")
+        else:
+            print(f"WARNING: Monitor metric '{self.monitor}' NOT FOUND!")
+    def check_pruned(self):
+        """Expose the check_pruned method from the wrapped callback"""
+        self.pruning_callback.check_pruned()
+        
+
     
     def state_dict(self):
         return {}
     
     def load_state_dict(self, state_dict):
         pass
+
+class SaveSamplerCallback:
+    """Saving sampler state after each trial in case we stop before finshing the main loop"""
+    def __init__(self, filename):
+        self.filename = filename
+    
+    def __call__(self, study, trial):
+        # Called after each trial completes
+        print(f"Saving current sampler state")
+        with open(self.filename, "wb") as fout:
+            pickle.dump(study.sampler, fout)
+
 def freeze_by_prefix(module: nn.Module, prefixes):
     if isinstance(prefixes, str):
         prefixes = [prefixes]
@@ -359,13 +385,18 @@ def objective(trial, args):
         else:
             raise ValueError("The model is missing the part", part, "to compile")
 
-    callbacks = [LearningRateMonitor(logging_interval="step")]
-    callbacks.append(
-        OptunaPruningCallbackWrapper(
-            trial=trial,
-            monitor="val_F-measure_beat",
-        )
+    
+    pruning_callback = OptunaPruningCallbackWrapper(
+    trial=trial,
+    monitor="val_F-measure_beat",
     )
+    # callbacks.append(
+    #     OptunaPruningCallbackWrapper(
+    #         trial=trial,
+    #         monitor="val_F-measure_beat",
+    #     )
+    # )
+    callbacks = [LearningRateMonitor(logging_interval="step"), pruning_callback]
     if args.use_early_stopping:
         callbacks.append(
             EarlyStopping(
@@ -421,15 +452,25 @@ def objective(trial, args):
 
     # print(f"validating the model before")
     # trainer.validate(pl_model, datamodule=datamodule)
-    trainer.fit(pl_model, datamodule)
-    val_results = trainer.validate(pl_model, datamodule=datamodule)
-    if logger is not None:
-        logger.experiment.finish()
-    return val_results[0]["val_F-measure_beat"]
-
+    try:
+        trainer.fit(pl_model, datamodule)
+        #pruning_callback.check_pruned()
+        val_results = trainer.validate(pl_model, datamodule=datamodule)
+        # if logger is not None:
+        #     logger.experiment.finish()
+        print(f"val f score is {val_results[0]['val_F-measure_beat']}")
+        return val_results[0]["val_F-measure_beat"]
+    except optuna.TrialPruned:
+        print(f"Trial {trial.number} was pruned")
+        raise
+    finally:
+        # This ALWAYS runs: success, fail, or pruned
+        if logger is not None:
+            # for WandbLogger
+            logger.experiment.finish()
 def main(args):
     
-    pruner = optuna.pruners.MedianPruner(n_warmup_steps=0, n_startup_trials = 5)
+    pruner = optuna.pruners.MedianPruner(n_warmup_steps=0, n_startup_trials = 2)
     
     if args.sampler_path:
         print(f"Loading a sampler from path {args.sampler_path}")
@@ -444,7 +485,7 @@ def main(args):
                                 pruner = pruner,
                                 storage = "sqlite:///optuna.db",
                                 load_if_exists=True )
-    study.optimize(lambda trial: objective(trial, args), n_trials = args.num_trials)
+    study.optimize(lambda trial: objective(trial, args), n_trials = args.num_trials,  callbacks=[SaveSamplerCallback(f"sampler_{args.name}.pkl")])
     with open(f"sampler_{args.name}.pkl", "wb") as fout:
             pickle.dump(study.sampler, fout)
 
