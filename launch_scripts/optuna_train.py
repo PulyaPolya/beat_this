@@ -390,12 +390,6 @@ def objective(trial, args):
     trial=trial,
     monitor="val_F-measure_beat",
     )
-    # callbacks.append(
-    #     OptunaPruningCallbackWrapper(
-    #         trial=trial,
-    #         monitor="val_F-measure_beat",
-    #     )
-    # )
     callbacks = [LearningRateMonitor(logging_interval="step"), pruning_callback]
     if args.use_early_stopping:
         callbacks.append(
@@ -471,7 +465,7 @@ def objective(trial, args):
             logger.experiment.finish()
 def main(args):
     # don't prune first 5 trials and wait 3 epochs to prune
-    pruner = optuna.pruners.MedianPruner(n_warmup_steps=0, n_startup_trials = 5, n_warmup_steps = 3)
+    pruner = optuna.pruners.MedianPruner(n_warmup_steps=3, n_startup_trials = 5)
     
     if args.sampler_path:
         print(f"Loading a sampler from path {args.sampler_path}")
@@ -484,7 +478,7 @@ def main(args):
                                 direction= "maximize",
                                 sampler = sampler,
                                 pruner = pruner,
-                                storage = "sqlite:///optuna_new.db",
+                                storage = "sqlite:///optuna.db",
                                 load_if_exists=True )
     study.optimize(lambda trial: objective(trial, args), n_trials = args.num_trials,  callbacks=[SaveSamplerCallback(f"sampler_{args.name}.pkl")])
     with open(f"sampler_{args.name}.pkl", "wb") as fout:
