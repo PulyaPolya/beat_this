@@ -168,6 +168,7 @@ class Config:
     resume_id :  Optional[str] = None
     # when none take the best checkpoint for this seed, else take the periodic checkpoint at this epoch
     ckpt_epoch : Optional[int] = None  # 
+    ## only used for continuing training
     checkpoints_folder: Optional[str] = None
     freeze_layers: Optional[int] = None
     save_frequency: Optional[int] = None
@@ -176,7 +177,7 @@ class Config:
     es_min_delta: float = 0.001   
     compute_metrics: bool =  False
     #full_data : bool = False
-    cluster_number : Optional[int]  = 0
+    cluster_number : Optional[int]  = None
     clustering_config: Optional[str] = None
 
 
@@ -213,7 +214,7 @@ def compute_predictions(model, trainer, predict_dataloader, checkpoint_name):
     metrics = {k: np.asarray([m[k] for m in metrics]) for k in metrics[0]}
     return metrics, dataset, preds, piece, dict_all_results
 
-def compute_metrics(model, trainer, checkpoint_name, data_dir, save_predictions = False, cluster_info = None, datasplit = "test", num_workers=16):
+def compute_metrics(model, trainer, checkpoint_name, data_dir, save_predictions = False, cluster_info = None, datasplit = "test", num_workers=16, name = None):
     checkpoint = load_checkpoint(checkpoint_name)
     datamodule_hparams =  checkpoint["datamodule_hyper_parameters"]
     # update the hparams with the ones from the arguments
@@ -222,18 +223,21 @@ def compute_metrics(model, trainer, checkpoint_name, data_dir, save_predictions 
     datamodule_hparams["predict_datasplit"] = datasplit
     datamodule_hparams["data_dir"] = data_dir
     datamodule = BeatDataModule(**datamodule_hparams)
-    datamodule.setup(stage="predict")compute_predictions
-    metrics, dataset, preds, piece, dict_all_results = (
+    datamodule.setup(stage="predict")
+    metrics, dataset, preds, piece, dict_all_results = compute_predictions(
             model, trainer, datamodule.predict_dataloader(), checkpoint_name)
        # save predictions to a json file
     if save_predictions:
         out_file_name =  Path(checkpoint_name).stem
         if cluster_info:
             save_path = os.path.join(f"json_{datasplit}_scores", cluster_info[0],cluster_info[1])
-            os.makedirs(save_path, exist_ok = True)
-            test_scores_path = os.path.join(save_path, f"{out_file_name}.json")
+            # os.makedirs(save_path, exist_ok = True)
+            # test_scores_path = os.path.join(save_path, f"{out_file_name}.json")
         else:
-            test_scores_path = os.path.join(f"json_{datasplit}_scores", f"{out_file_name}.json")
+            subfolder = name if name else "" 
+            save_path = os.path.join(f"json_{datasplit}_scores", subfolder)
+        os.makedirs(save_path, exist_ok=True)
+        test_scores_path = os.path.join(save_path,  f"{out_file_name}.json")
 
         with open(test_scores_path, 'w') as fp:
             json.dump(dict_all_results, fp)
@@ -497,11 +501,13 @@ def main(args):
     new_best_path = rename_best_checkpoint(best_path)
     trainer.validate(pl_model, datamodule=datamodule, ckpt_path=new_best_path)
     cluster_info = None if not args.cluster_number else cluster_info
-    compute_metrics(pl_model, trainer, checkpoint_name = new_best_path, data_dir = data_dir, save_predictions = True, cluster_info = cluster_info, datasplit = "val", num_workers=args.num_workers)
+    compute_metrics(pl_model, trainer, checkpoint_name = new_best_path, data_dir = data_dir, save_predictions = True, cluster_info = cluster_info, datasplit = "val",
+                     num_workers=args.num_workers, name=args.name)
     #compute_metrics(pl_model, trainer, datamodule, checkpoint_name = new_best_path, save_predictions= True, cluster_info= cluster_info, setup="val")
     #trainer.test(pl_model, datamodule, ckpt_path =new_best_path)
     if args.compute_metrics:
-        compute_metrics(pl_model, trainer, datamodule, checkpoint_name = new_best_path, save_predictions= True, cluster_info= cluster_info, setup="test")
+        compute_metrics(pl_model, trainer, datamodule, checkpoint_name = new_best_path, save_predictions= True, cluster_info= cluster_info, setup="test",
+                        name = args.name)
         
 
     #trainer.test(pl_model, datamodule)
