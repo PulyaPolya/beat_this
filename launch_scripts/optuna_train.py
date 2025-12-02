@@ -207,7 +207,7 @@ class Config:
     resume_id :  Optional[str] = None
     # when none take the best checkpoint for this seed, else take the periodic checkpoint at this epoch
     checkpoints_folder: Optional[str] = None
-    freeze_layers: Optional[int] = None
+    #freeze_layers: Optional[int] = None
     save_frequency: Optional[int] = None
     use_early_stopping: bool = False                             
     es_patience: int = 10                    
@@ -306,13 +306,27 @@ def objective(trial, args):
             "max_parts": 9,
         }
 
-    lr_hpo =  trial.suggest_float("lr", 1e-5, 8e-3, log = True) 
+    lr_hpo =  trial.suggest_float("lr", 8e-6, 1e-3, log = True) 
     weight_decay_hpo = trial.suggest_float("weight_decay", 1e-4, 1e-1, log = True)
     batch_size_hpo = trial.suggest_categorical ("batch_size", [ 4, 8, 16])
-    if args.cluster_number:
-        checkpoint_epoch_hpo =  trial.suggest_categorical ("checkpoint", [ 0, 5, 10, 20, 40, 70, "best", 100])
-        freeze_layers_hpo = trial.suggest_int("freeze_layers", 0, 4)
+    hpo_config = {
+        "trial_number": trial.number,
+        "lr": lr_hpo,
+        "weight_decay": weight_decay_hpo,
+        "batch_size": batch_size_hpo,
+    }
 
+    checkpoint_epoch_hpo = None
+    freeze_layers_hpo = None
+        
+    if args.cluster_number:
+        checkpoint_epoch_hpo = trial.suggest_categorical(
+            "checkpoint", [0, 5, 10, 20, 40, 70, "best", 100]
+        )
+        freeze_layers_hpo = trial.suggest_int("freeze_layers", 0, 4)
+        hpo_config["checkpoint_epoch"] = checkpoint_epoch_hpo
+        hpo_config["freeze_layers"] = freeze_layers_hpo
+        
     datamodule = BeatDataModule(
         data_dir,
         batch_size=batch_size_hpo,#args.batch_size,
@@ -329,25 +343,32 @@ def objective(trial, args):
     datamodule.setup(stage="fit")
     seed_everything(args.seed, workers=True)
     set_seed(args.seed)
-    
-    
-   # warmup_steps_hpo = trial.suggest_categorical("warmup_steps", [100, 500, 1000])
-    # only attempt to freeze layers for the cluster models
-    if args.clustering_config:
-        freeze_layers_hpo = trial.suggest_int("freeze_layers", 0, 5 )
+  
     print("Starting a new run with the following parameters:")
     print(args)
 
     #params_str = f"{'noval ' if not args.val else ''}{'hung ' if args.hung_data else ''}{'fold' + str(args.fold) + ' ' if args.fold is not None else ''}{args.loss}-h{args.transformer_dim}-aug{args.tempo_augmentation}{args.pitch_augmentation}{args.mask_augmentation}{' nosumH ' if not args.sum_head else ''}{' nopartialT ' if not args.partial_transformers else ''}"
     if args.logger == "wandb":
-        if args.resume_checkpoint and args.resume_id:
-            wandb_args = dict(id=args.resume_id, resume="must")
-            
-        else:
-            wandb_args = {}
+        wandb_logger_kwargs = {}
+        # if you later want to support resume:
+        # if args.resume_checkpoint and args.resume_id:
+        #     wandb_logger_kwargs = dict(id=args.resume_id, resume="must")
+
         name = f"trial_{trial.number}"
+        if args.cluster_number:
+            group = f"{args.clustering_config}_{args.cluster_number}_{args.name}"
+        else:
+            group = args.name
+
+        # merge base args config + HPO config
+        full_config = {**vars(args), **hpo_config}
+
         logger = WandbLogger(
-            project="beat_this", group=args.name, name = name, config = vars(args), **wandb_args
+            project="beat_this",
+            group=group,
+            name=name,
+            config=full_config,
+            **wandb_logger_kwargs,
         )
     else:
         logger = None
@@ -465,6 +486,7 @@ def objective(trial, args):
             logger.experiment.finish()
 def main(args):
     # don't prune first 5 trials and wait 3 epochs to prune
+    # changed!!!!!
     pruner = optuna.pruners.MedianPruner(n_warmup_steps=3, n_startup_trials = 5)
     
     if args.sampler_path:
@@ -478,7 +500,7 @@ def main(args):
                                 direction= "maximize",
                                 sampler = sampler,
                                 pruner = pruner,
-                                storage = "sqlite:///optuna_old.db",
+                                storage = "sqlite:///optuna_try.db",
                                 load_if_exists=True )
     study.optimize(lambda trial: objective(trial, args), n_trials = args.num_trials,  callbacks=[SaveSamplerCallback(f"sampler_{args.name}.pkl")])
     with open(f"sampler_{args.name}.pkl", "wb") as fout:
