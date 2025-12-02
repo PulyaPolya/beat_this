@@ -172,7 +172,7 @@ class Config:
     checkpoints_folder: Optional[str] = None
     freeze_layers: Optional[int] = None
     save_frequency: Optional[int] = None
-    use_early_stopping: bool = True                              
+    use_early_stopping: bool = False                              
     es_patience: int = 10                    
     es_min_delta: float = 0.001   
     compute_metrics: bool =  False
