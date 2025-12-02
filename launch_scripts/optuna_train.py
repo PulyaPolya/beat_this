@@ -108,7 +108,6 @@ def freeze_layers(num_to_freeze, pl_model):
 
     set_bn_eval_by_prefix(pl_model, layers_to_freeze)
 
-    #return pl_model
 class PlateauUnfreeze(Callback):
     def __init__(self, monitor="val_f1", mode="max", patience=1,  lr_backbone=1e-5):
         super().__init__()
@@ -207,7 +206,6 @@ class Config:
     resume_checkpoint: bool = False
     resume_id :  Optional[str] = None
     # when none take the best checkpoint for this seed, else take the periodic checkpoint at this epoch
-    ckpt_epoch : Optional[int] = None  # 
     checkpoints_folder: Optional[str] = None
     freeze_layers: Optional[int] = None
     save_frequency: Optional[int] = None
@@ -226,23 +224,25 @@ def _load_yaml_or_json(path: Path) -> dict:
     if path.suffix.lower() in (".yml", ".yaml"):
         data = yaml.safe_load(raw) or {}
     return data
-def load_checkpoint_resume(seed_folder, seed, epoch= None):
-    seed_folder = seed_folder.replace("_SEED_", str(seed))
-    checkpoint_type = "best" if epoch == None else "periodic"
+
+def load_checkpoint_hpo (checkpoint_epoch, seed_folder):
+
+    checkpoint_type = "best" if checkpoint_epoch == "best" else "periodic"
     checkpoint_folder = os.path.join(seed_folder, checkpoint_type)
     if checkpoint_type == "best":
         checkpoint = [check for check in os.listdir(checkpoint_folder) if "orig" in check][0]
     else:
-        epoch = epoch -1
+        epoch = checkpoint_epoch -1
         checkpoint = [check for check in os.listdir(checkpoint_folder) if f"{epoch:02d}" in check][0]
     checkpoint_path = os.path.join(checkpoint_folder, checkpoint)
-    print(f"Loading {checkpoint_type} checkpoint for seed {seed} from folder {seed_folder}  from the path {checkpoint_path}")
+    print(f"Loading {checkpoint_type} checkpoint from folder {seed_folder}  from the path {checkpoint_path}")
     checkpoint_name = Path(checkpoint_path).stem
     if not checkpoint_name.endswith("_orig"):
         ckpt = rename_best_checkpoint(checkpoint_path,  save = False)
     else:
         ckpt = torch.load(checkpoint_path, map_location="cpu")
     return ckpt
+
 
 def rename_key(key: str, insert: str) -> str:
     parts = key.split(".")
@@ -309,6 +309,10 @@ def objective(trial, args):
     lr_hpo =  trial.suggest_float("lr", 1e-5, 8e-3, log = True) 
     weight_decay_hpo = trial.suggest_float("weight_decay", 1e-4, 1e-1, log = True)
     batch_size_hpo = trial.suggest_categorical ("batch_size", [ 4, 8, 16])
+    if args.cluster_number:
+        checkpoint_epoch_hpo =  trial.suggest_categorical ("checkpoint", [ 0, 5, 10, 20, 40, 70, "best", 100])
+        freeze_layers_hpo = trial.suggest_int("freeze_layers", 0, 4)
+
     datamodule = BeatDataModule(
         data_dir,
         batch_size=batch_size_hpo,#args.batch_size,
@@ -325,9 +329,7 @@ def objective(trial, args):
     datamodule.setup(stage="fit")
     seed_everything(args.seed, workers=True)
     set_seed(args.seed)
-    params = trial.params  # contains all current params *after suggestion*
-    print(f"\n=== Trial {trial.number} ===")
-    print("Parameters:", params)
+    
     
    # warmup_steps_hpo = trial.suggest_categorical("warmup_steps", [100, 500, 1000])
     # only attempt to freeze layers for the cluster models
@@ -401,15 +403,6 @@ def objective(trial, args):
                 verbose=True
             )
         )
-    # callbacks.append(
-    # PlateauUnfreeze(
-    #     monitor="val_F-measure_beat",      # choose your metric name
-    #     mode="max",            # because higher F1 is better
-    #     patience=3,            # wait 3 bad epochs before unfreezing
-    #     #get_blocks_fn=get_blocks_fn,
-    #     lr_backbone=5e-5
-    # )
-    # )
     use_gpu = torch.cuda.is_available() 
     trainer = Trainer(
         max_epochs=args.max_epochs,
@@ -425,21 +418,25 @@ def objective(trial, args):
         enable_checkpointing=False
     )
     
-    if args.resume_checkpoint:
-
+    # check if we train cluster-specific models 
+    if args.cluster_number:
+        # if optuna chose to fine-tune
+        if checkpoint_epoch_hpo != 0:
         #ckpt = torch.load(args.resume_checkpoint, map_location="cpu")
         
-        param_name = "model.frontend.stem.bn1d.weight" 
-        before = pl_model.state_dict()[param_name].clone()
-        # Load weights
-        ckpt = load_checkpoint_resume(seed_folder=args.checkpoints_folder, seed=args.seed, epoch=args.ckpt_epoch)
-        missing, unexpected = pl_model.load_state_dict(ckpt["state_dict"], strict=False)
-        print("Loaded weights. Missing:", missing)
-        print("Unexpected:", unexpected)
-        after = pl_model.state_dict()[param_name]
-        print("Are weights identical?", torch.equal(before, after))
+            param_name = "model.frontend.stem.bn1d.weight" 
+            before = pl_model.state_dict()[param_name].clone()
+            # Load weights
+            ckpt = load_checkpoint_hpo(checkpoint_epoch=checkpoint_epoch_hpo, seed_folder=args.checkpoints_folder)
+            missing, unexpected = pl_model.load_state_dict(ckpt["state_dict"], strict=False)
+            print("Loaded weights. Missing:", missing)
+            print("Unexpected:", unexpected)
+            after = pl_model.state_dict()[param_name]
+            assert torch.equal(before, after) == False
+            print("Are weights identical?", torch.equal(before, after))
 
         if freeze_layers_hpo > 0:
+            print(f"Freezing {freeze_layers_hpo} layers")
             freeze_layers(freeze_layers_hpo, pl_model)
             total = sum(p.numel() for p in pl_model.parameters())
             trainable = sum(p.numel() for p in pl_model.parameters() if p.requires_grad)
@@ -447,6 +444,9 @@ def objective(trial, args):
 
     # print(f"validating the model before")
     # trainer.validate(pl_model, datamodule=datamodule)
+    params = trial.params  # contains all current params *after suggestion*
+    print(f"\n=== Trial {trial.number} ===")
+    print("Parameters:", params)
     try:
         trainer.fit(pl_model, datamodule)
         #pruning_callback.check_pruned()
@@ -478,7 +478,7 @@ def main(args):
                                 direction= "maximize",
                                 sampler = sampler,
                                 pruner = pruner,
-                                storage = "sqlite:///optuna.db",
+                                storage = "sqlite:///optuna_old.db",
                                 load_if_exists=True )
     study.optimize(lambda trial: objective(trial, args), n_trials = args.num_trials,  callbacks=[SaveSamplerCallback(f"sampler_{args.name}.pkl")])
     with open(f"sampler_{args.name}.pkl", "wb") as fout:
