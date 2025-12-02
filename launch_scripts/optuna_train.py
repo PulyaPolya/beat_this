@@ -205,6 +205,7 @@ class Config:
     checkpoint_path : str = "data"
     resume_checkpoint: bool = False
     resume_id :  Optional[str] = None
+    ckpt_epoch : Optional[int] = None 
     # when none take the best checkpoint for this seed, else take the periodic checkpoint at this epoch
     checkpoints_folder: Optional[str] = None
     #freeze_layers: Optional[int] = None
@@ -316,15 +317,15 @@ def objective(trial, args):
         "batch_size": batch_size_hpo,
     }
 
-    checkpoint_epoch_hpo = None
+    #checkpoint_epoch_hpo = None
     freeze_layers_hpo = None
         
     if args.cluster_number:
-        checkpoint_epoch_hpo = trial.suggest_categorical(
-            "checkpoint", [0, 5, 10, 20, 40, 70, "best", 100]
-        )
+        # checkpoint_epoch_hpo = trial.suggest_categorical(
+        #     "checkpoint", [0, 5, 10, 20, 40, 70, "best", 100]
+        # )
         freeze_layers_hpo = trial.suggest_int("freeze_layers", 0, 4)
-        hpo_config["checkpoint_epoch"] = checkpoint_epoch_hpo
+        #hpo_config["checkpoint_epoch"] = checkpoint_epoch_hpo
         hpo_config["freeze_layers"] = freeze_layers_hpo
         
     datamodule = BeatDataModule(
@@ -350,7 +351,6 @@ def objective(trial, args):
     #params_str = f"{'noval ' if not args.val else ''}{'hung ' if args.hung_data else ''}{'fold' + str(args.fold) + ' ' if args.fold is not None else ''}{args.loss}-h{args.transformer_dim}-aug{args.tempo_augmentation}{args.pitch_augmentation}{args.mask_augmentation}{' nosumH ' if not args.sum_head else ''}{' nopartialT ' if not args.partial_transformers else ''}"
     if args.logger == "wandb":
         wandb_logger_kwargs = {}
-        # if you later want to support resume:
         # if args.resume_checkpoint and args.resume_id:
         #     wandb_logger_kwargs = dict(id=args.resume_id, resume="must")
 
@@ -442,13 +442,14 @@ def objective(trial, args):
     # check if we train cluster-specific models 
     if args.cluster_number:
         # if optuna chose to fine-tune
-        if checkpoint_epoch_hpo != 0:
+        #if checkpoint_epoch_hpo != 0:
+        if args.ckpt_epoch:
         #ckpt = torch.load(args.resume_checkpoint, map_location="cpu")
         
             param_name = "model.frontend.stem.bn1d.weight" 
             before = pl_model.state_dict()[param_name].clone()
             # Load weights
-            ckpt = load_checkpoint_hpo(checkpoint_epoch=checkpoint_epoch_hpo, seed_folder=args.checkpoints_folder)
+            ckpt = load_checkpoint_hpo(checkpoint_epoch=args.ckpt_epoch, seed_folder=args.checkpoints_folder)
             missing, unexpected = pl_model.load_state_dict(ckpt["state_dict"], strict=False)
             print("Loaded weights. Missing:", missing)
             print("Unexpected:", unexpected)
@@ -500,7 +501,7 @@ def main(args):
                                 direction= "maximize",
                                 sampler = sampler,
                                 pruner = pruner,
-                                storage = "sqlite:///optuna_try.db",
+                                storage = "sqlite:///optuna.db",
                                 load_if_exists=True )
     study.optimize(lambda trial: objective(trial, args), n_trials = args.num_trials,  callbacks=[SaveSamplerCallback(f"sampler_{args.name}.pkl")])
     with open(f"sampler_{args.name}.pkl", "wb") as fout:
