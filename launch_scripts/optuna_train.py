@@ -205,7 +205,7 @@ class Config:
     checkpoint_path : str = "data"
     resume_checkpoint: bool = False
     resume_id :  Optional[str] = None
-    ckpt_epoch : Optional[int] = None 
+    ckpt_epoch : Optional[str] = None 
     # when none take the best checkpoint for this seed, else take the periodic checkpoint at this epoch
     checkpoints_folder: Optional[str] = None
     #freeze_layers: Optional[int] = None
@@ -233,7 +233,7 @@ def load_checkpoint_hpo (checkpoint_epoch, seed_folder):
     if checkpoint_type == "best":
         checkpoint = [check for check in os.listdir(checkpoint_folder) if "orig" in check][0]
     else:
-        epoch = checkpoint_epoch -1
+        epoch = int(checkpoint_epoch) -1
         checkpoint = [check for check in os.listdir(checkpoint_folder) if f"{epoch:02d}" in check][0]
     checkpoint_path = os.path.join(checkpoint_folder, checkpoint)
     print(f"Loading {checkpoint_type} checkpoint from folder {seed_folder}  from the path {checkpoint_path}")
@@ -463,12 +463,24 @@ def objective(trial, args):
             total = sum(p.numel() for p in pl_model.parameters())
             trainable = sum(p.numel() for p in pl_model.parameters() if p.requires_grad)
             print(f"Trainable: {trainable:,} / {total:,}")
-
-    # print(f"validating the model before")
-    # trainer.validate(pl_model, datamodule=datamodule)
     params = trial.params  # contains all current params *after suggestion*
     print(f"\n=== Trial {trial.number} ===")
     print("Parameters:", params)
+    if trial.number == 0:
+        # validating the model in the very beginning
+        print(f"validating the model before")
+        val_results_start = trainer.validate(pl_model, datamodule=datamodule)
+        if logger is not None:
+            baseline_f = val_results_start[0]["val_F-measure_beat"]
+            for ep in range(args.max_epochs):
+                logger.log_metrics(
+                    {
+                        "epoch": ep,
+                        "val_F-measure_beat_baseline": baseline_f,
+                    },
+                    step=ep,  # aligns with epoch if you use epoch as x-axis in W&B
+                )
+    
     try:
         trainer.fit(pl_model, datamodule)
         #pruning_callback.check_pruned()
@@ -501,7 +513,7 @@ def main(args):
                                 direction= "maximize",
                                 sampler = sampler,
                                 pruner = pruner,
-                                storage = "sqlite:///optuna.db",
+                                storage = "sqlite:///optuna_try.db",
                                 load_if_exists=True )
     study.optimize(lambda trial: objective(trial, args), n_trials = args.num_trials,  callbacks=[SaveSamplerCallback(f"sampler_{args.name}.pkl")])
     with open(f"sampler_{args.name}.pkl", "wb") as fout:
