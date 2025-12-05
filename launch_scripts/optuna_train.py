@@ -234,7 +234,7 @@ def load_checkpoint_hpo (checkpoint_epoch, seed_folder):
         checkpoint = [check for check in os.listdir(checkpoint_folder) if "orig" in check][0]
     else:
         epoch = int(checkpoint_epoch) -1
-        checkpoint = [check for check in os.listdir(checkpoint_folder) if f"{epoch:02d}" in check][0]
+        checkpoint = [check for check in os.listdir(checkpoint_folder) if f"epoch={epoch}" in check][0]
     checkpoint_path = os.path.join(checkpoint_folder, checkpoint)
     print(f"Loading {checkpoint_type} checkpoint from folder {seed_folder}  from the path {checkpoint_path}")
     checkpoint_name = Path(checkpoint_path).stem
@@ -317,15 +317,15 @@ def objective(trial, args):
         "batch_size": batch_size_hpo,
     }
 
-    #checkpoint_epoch_hpo = None
+    checkpoint_epoch_hpo = None
     freeze_layers_hpo = None
         
     if args.cluster_number:
-        # checkpoint_epoch_hpo = trial.suggest_categorical(
-        #     "checkpoint", [0, 5, 10, 20, 40, 70, "best", 100]
-        # )
+        checkpoint_epoch_hpo = trial.suggest_categorical(
+            "checkpoint", [60, 70, "best", 80, 90, 100]
+        )
         freeze_layers_hpo = trial.suggest_int("freeze_layers", 0, 4)
-        #hpo_config["checkpoint_epoch"] = checkpoint_epoch_hpo
+        hpo_config["checkpoint_epoch"] = checkpoint_epoch_hpo
         hpo_config["freeze_layers"] = freeze_layers_hpo
         
     datamodule = BeatDataModule(
@@ -442,14 +442,14 @@ def objective(trial, args):
     # check if we train cluster-specific models 
     if args.cluster_number:
         # if optuna chose to fine-tune
-        #if checkpoint_epoch_hpo != 0:
-        if args.ckpt_epoch:
+        if checkpoint_epoch_hpo != 0:
+        #if args.ckpt_epoch:
         #ckpt = torch.load(args.resume_checkpoint, map_location="cpu")
         
             param_name = "model.frontend.stem.bn1d.weight" 
             before = pl_model.state_dict()[param_name].clone()
             # Load weights
-            ckpt = load_checkpoint_hpo(checkpoint_epoch=args.ckpt_epoch, seed_folder=args.checkpoints_folder)
+            ckpt = load_checkpoint_hpo(checkpoint_epoch=checkpoint_epoch_hpo, seed_folder=args.checkpoints_folder)
             missing, unexpected = pl_model.load_state_dict(ckpt["state_dict"], strict=False)
             print("Loaded weights. Missing:", missing)
             print("Unexpected:", unexpected)
@@ -466,20 +466,20 @@ def objective(trial, args):
     params = trial.params  # contains all current params *after suggestion*
     print(f"\n=== Trial {trial.number} ===")
     print("Parameters:", params)
-    if trial.number == 0:
-        # validating the model in the very beginning
-        print(f"validating the model before")
-        val_results_start = trainer.validate(pl_model, datamodule=datamodule)
-        if logger is not None:
-            baseline_f = val_results_start[0]["val_F-measure_beat"]
-            for ep in range(args.max_epochs):
-                logger.log_metrics(
-                    {
-                        "epoch": ep,
-                        "val_F-measure_beat_baseline": baseline_f,
-                    },
-                    step=ep,  # aligns with epoch if you use epoch as x-axis in W&B
-                )
+    # if trial.number == 0:
+    #     # validating the model in the very beginning
+    #     print(f"validating the model before")
+    #     val_results_start = trainer.validate(pl_model, datamodule=datamodule)
+    #     if logger is not None:
+    #         baseline_f = val_results_start[0]["val_F-measure_beat"]
+    #         for ep in range(args.max_epochs +1):
+    #             logger.log_metrics(
+    #                 {
+    #                     "epoch": ep,
+    #                     "val_F-measure_beat_baseline": baseline_f,
+    #                 },
+    #                 step=ep,  # aligns with epoch if you use epoch as x-axis in W&B
+    #             )
     
     try:
         trainer.fit(pl_model, datamodule)
@@ -500,7 +500,7 @@ def objective(trial, args):
 def main(args):
     # don't prune first 5 trials and wait 3 epochs to prune
     # changed!!!!!
-    pruner = optuna.pruners.MedianPruner(n_warmup_steps=3, n_startup_trials = 5)
+    pruner = optuna.pruners.MedianPruner(n_warmup_steps=5, n_startup_trials = 5)
     
     if args.sampler_path:
         print(f"Loading a sampler from path {args.sampler_path}")
@@ -513,7 +513,7 @@ def main(args):
                                 direction= "maximize",
                                 sampler = sampler,
                                 pruner = pruner,
-                                storage = "sqlite:///optuna_try.db",
+                                storage = "sqlite:///optuna.db",
                                 load_if_exists=True )
     study.optimize(lambda trial: objective(trial, args), n_trials = args.num_trials,  callbacks=[SaveSamplerCallback(f"sampler_{args.name}.pkl")])
     with open(f"sampler_{args.name}.pkl", "wb") as fout:
