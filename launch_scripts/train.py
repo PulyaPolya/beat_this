@@ -229,16 +229,15 @@ def compute_metrics(model, trainer, checkpoint_name, data_dir, save_predictions 
        # save predictions to a json file
     if save_predictions:
         out_file_name =  Path(checkpoint_name).stem
+        subfolder = name if name else "" 
         if cluster_info:
-            save_path = os.path.join(f"json_{datasplit}_scores", cluster_info[0],cluster_info[1])
+            save_path = os.path.join(f"json_{datasplit}_scores", cluster_info[0],cluster_info[1], subfolder)
             # os.makedirs(save_path, exist_ok = True)
             # test_scores_path = os.path.join(save_path, f"{out_file_name}.json")
         else:
-            subfolder = name if name else "" 
             save_path = os.path.join(f"json_{datasplit}_scores", subfolder)
         os.makedirs(save_path, exist_ok=True)
         test_scores_path = os.path.join(save_path,  f"{out_file_name}.json")
-
         with open(test_scores_path, 'w') as fp:
             json.dump(dict_all_results, fp)
     averaged_metrics = {k: np.mean(v) for k, v in metrics.items()}
@@ -266,7 +265,7 @@ def load_checkpoint_resume(seed_folder, seed, epoch= None):
         checkpoint = [check for check in os.listdir(checkpoint_folder) if "orig" in check][0]
     else:
         epoch = epoch -1
-        checkpoint = [check for check in os.listdir(checkpoint_folder) if f"{epoch:02d}" in check][0]
+        checkpoint = [check for check in os.listdir(checkpoint_folder) if f"epoch={epoch}" in check][0]
     checkpoint_path = os.path.join(checkpoint_folder, checkpoint)
     print(f"Loading {checkpoint_type} checkpoint for seed {seed} from folder {seed_folder}  from the path {checkpoint_path}")
     checkpoint_name = Path(checkpoint_path).stem
@@ -395,7 +394,7 @@ def main(args):
         partial_transformers=args.partial_transformers
     )
     #print(ModelSummary(model=pl_model, max_depth=2)) 
-    print(summary(pl_model))
+    #print(summary(pl_model))
     for part in args.compile:
         if hasattr(pl_model.model, part):
             setattr(pl_model.model, part, torch.compile(getattr(pl_model.model, part)))
@@ -508,9 +507,6 @@ def main(args):
     if args.compute_metrics:
         compute_metrics(pl_model, trainer, datamodule, checkpoint_name = new_best_path, save_predictions= True, cluster_info= cluster_info, setup="test",
                         name = args.name)
-        
-
-    #trainer.test(pl_model, datamodule)
 
 if __name__ == "__main__":
     cfg =load_config("launch_scripts/train_params.yaml")
