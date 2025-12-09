@@ -283,6 +283,8 @@ def load_config(path: str | os.PathLike) -> Config:
     return Config(**data)
 
 def objective(trial, args):
+    seed_everything(args.seed, workers=True)
+    set_seed(args.seed)
     if args.cluster_number:
         print(f"Using data from cluster number {args.cluster_number}")
         data_dir =Path(os.path.join(args.data_path, args.clustering_config, f"cluster_{args.cluster_number}")) / "data" #Path(__file__).parent.parent.relative_to(Path.cwd()) / "data"
@@ -309,7 +311,7 @@ def objective(trial, args):
 
     lr_hpo =  trial.suggest_float("lr", 3e-5, 1e-3, log = True) # 8e-6
     weight_decay_hpo = trial.suggest_float("weight_decay", 1e-4, 1e-1, log = True)
-    batch_size_hpo = trial.suggest_categorical ("batch_size", [ 4, 8, 16])
+    batch_size_hpo =  trial.suggest_categorical ("batch_size", [ 4, 8, 16])
     hpo_config = {
         "trial_number": trial.number,
         "lr": lr_hpo,
@@ -321,7 +323,7 @@ def objective(trial, args):
     freeze_layers_hpo = None
         
     if args.cluster_number:
-        checkpoint_epoch_hpo = trial.suggest_categorical(
+        checkpoint_epoch_hpo =  trial.suggest_categorical(
             "checkpoint", [60, 70,"best", 80, 90, 100]
         )
         freeze_layers_hpo = trial.suggest_int("freeze_layers", 0, 4)
@@ -330,7 +332,7 @@ def objective(trial, args):
         
     datamodule = BeatDataModule(
         data_dir,
-        batch_size=batch_size_hpo,#args.batch_size,
+        batch_size=batch_size_hpo,
         train_length=args.train_length,
         spect_fps=args.fps,
         num_workers=args.num_workers,
@@ -342,8 +344,7 @@ def objective(trial, args):
         fold=args.fold,
     )
     datamodule.setup(stage="fit")
-    seed_everything(args.seed, workers=True)
-    set_seed(args.seed)
+    
   
     print("Starting a new run with the following parameters:")
     print(args)
@@ -513,7 +514,7 @@ def main(args):
                                 direction= "maximize",
                                 sampler = sampler,
                                 pruner = pruner,
-                                storage = "sqlite:///optuna.db",
+                                storage = "sqlite:///optuna_new.db",
                                 load_if_exists=True )
     study.optimize(lambda trial: objective(trial, args), n_trials = args.num_trials,  callbacks=[SaveSamplerCallback(f"sampler_{args.name}.pkl")])
     with open(f"sampler_{args.name}.pkl", "wb") as fout:
