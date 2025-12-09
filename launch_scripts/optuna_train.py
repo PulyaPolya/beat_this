@@ -307,7 +307,7 @@ def objective(trial, args):
             "max_parts": 9,
         }
 
-    lr_hpo =  trial.suggest_float("lr", 8e-6, 1e-3, log = True) 
+    lr_hpo =  trial.suggest_float("lr", 3e-5, 1e-3, log = True) # 8e-6
     weight_decay_hpo = trial.suggest_float("weight_decay", 1e-4, 1e-1, log = True)
     batch_size_hpo = trial.suggest_categorical ("batch_size", [ 4, 8, 16])
     hpo_config = {
@@ -322,7 +322,7 @@ def objective(trial, args):
         
     if args.cluster_number:
         checkpoint_epoch_hpo = trial.suggest_categorical(
-            "checkpoint", [60, 70, "best", 80, 90, 100]
+            "checkpoint", [60, 70,"best", 80, 90, 100]
         )
         freeze_layers_hpo = trial.suggest_int("freeze_layers", 0, 4)
         hpo_config["checkpoint_epoch"] = checkpoint_epoch_hpo
