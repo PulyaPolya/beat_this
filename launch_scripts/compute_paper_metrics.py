@@ -39,10 +39,14 @@ def main(args):
         )
        # save predictions to a json file
         out_file_name =  Path(args.models[0]).stem
-        if args.clustering_config is not None and args.cluster_number is not None:
-            save_path = os.path.join(f"json_{args.datasplit}_scores", args.clustering_config, f"cluster_{args.cluster_number}")
+        if args.name:
+            name = args.name
         else:
-            save_path = os.path.join(f"json_{args.datasplit}_scores", "full_data")
+            name = ""
+        if args.clustering_config is not None and args.cluster_number is not None:
+            save_path = os.path.join(f"json_{args.datasplit}_scores", args.clustering_config, f"cluster_{args.cluster_number}", name)
+        else:
+            save_path = os.path.join(f"json_{args.datasplit}_scores", "full_data", name)
         os.makedirs(save_path, exist_ok = True)
         test_scores_path = os.path.join(save_path, f"{out_file_name}.json")
 

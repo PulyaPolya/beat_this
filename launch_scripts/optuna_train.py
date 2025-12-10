@@ -501,7 +501,7 @@ def objective(trial, args):
 def main(args):
     # don't prune first 5 trials and wait 3 epochs to prune
     # changed!!!!!
-    pruner = optuna.pruners.MedianPruner(n_warmup_steps=5, n_startup_trials = 5)
+    pruner = optuna.pruners.MedianPruner(n_warmup_steps=8, n_startup_trials = 5)
     
     if args.sampler_path:
         print(f"Loading a sampler from path {args.sampler_path}")

@@ -490,8 +490,8 @@ def main(args):
             trainable = sum(p.numel() for p in pl_model.parameters() if p.requires_grad)
             print(f"Trainable: {trainable:,} / {total:,}")
     
-        print(f"validating the model before")    # uncomment  for real runs!!!!
-        trainer.validate(pl_model, datamodule=datamodule )
+        # print(f"validating the model before")    # uncomment  for real runs!!!!
+        # trainer.validate(pl_model, datamodule=datamodule )
     trainer.fit(pl_model, datamodule)
     best_path = best_ckpt_cb.best_model_path 
     print("Best checkpoint:", best_path)
