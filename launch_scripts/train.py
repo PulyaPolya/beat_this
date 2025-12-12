@@ -299,10 +299,10 @@ def rename_best_checkpoint(best_ckpt_path,  key_fragment="_orig_mod", save = Tru
         return ckpt
 
 def main(args):
-    # for repeatability
+    # for reproducibility
     seed_everything(args.seed, workers=True)
     set_seed(args.seed)
-
+    seed = args.seed
     print("Starting  new run with the following parameters:")
     print(args)
 
@@ -405,11 +405,11 @@ def main(args):
     callbacks = [LearningRateMonitor(logging_interval="step")]
     # save every 5 epochs
     if not args.cluster_number: #args.full_data:
-        checkpoint_folder = os.path.join(args.checkpoint_path, f"{args.name}S{args.seed}{params_str}".strip() )
+        checkpoint_folder = os.path.join(args.checkpoint_path, f"{args.name}S{seed}{params_str}".strip() )
     else:
         #data_path_parts = args.data_path.split(os.sep)
         cluster_info = [args.clustering_config, str(args.cluster_number)]
-        checkpoint_folder = os.path.join(args.checkpoint_path,cluster_info[0], cluster_info[1], f"{args.name}S{args.seed}{params_str}".strip() )
+        checkpoint_folder = os.path.join(args.checkpoint_path,cluster_info[0], cluster_info[1], f"{args.name}S{seed}{params_str}".strip() )
     if args.save_frequency:
         save_top_k = -1
         every_n_epochs=args.save_frequency
@@ -431,7 +431,7 @@ def main(args):
    
     best_ckpt_cb = ModelCheckpoint(
         dirpath=os.path.join(checkpoint_folder, "best"),
-        filename=f"best-seed{args.seed}-{{epoch:02d}}-valf{{val_F-measure_beat:.4f}}",
+        filename=f"best-seed{seed}-{{epoch:02d}}-valf{{val_F-measure_beat:.4f}}",
         monitor="val_F-measure_beat",
         mode="max",
         save_top_k=1,                   # keep only the best
@@ -448,15 +448,6 @@ def main(args):
                 verbose=True
             )
         )
-    # callbacks.append(
-    # PlateauUnfreeze(
-    #     monitor="val_F-measure_beat",      # choose your metric name
-    #     mode="max",            # because higher F1 is better
-    #     patience=3,            # wait 3 bad epochs before unfreezing
-    #     #get_blocks_fn=get_blocks_fn,
-    #     lr_backbone=5e-5
-    # )
-    # )
     use_gpu = torch.cuda.is_available() 
     trainer = Trainer(
         max_epochs=args.max_epochs,
@@ -477,7 +468,7 @@ def main(args):
         param_name = "model.frontend.stem.bn1d.weight" 
         before = pl_model.state_dict()[param_name].clone()
         # Load weights
-        ckpt = load_checkpoint_resume(seed_folder=args.checkpoints_folder, seed=args.seed, epoch=args.ckpt_epoch)
+        ckpt = load_checkpoint_resume(seed_folder=args.checkpoints_folder, seed=seed, epoch=args.ckpt_epoch)
         missing, unexpected = pl_model.load_state_dict(ckpt["state_dict"], strict=False)
         print("Loaded weights. Missing:", missing)
         print("Unexpected:", unexpected)
@@ -505,8 +496,8 @@ def main(args):
     #compute_metrics(pl_model, trainer, datamodule, checkpoint_name = new_best_path, save_predictions= True, cluster_info= cluster_info, setup="val")
     #trainer.test(pl_model, datamodule, ckpt_path =new_best_path)
     if args.compute_metrics:
-        compute_metrics(pl_model, trainer, datamodule, checkpoint_name = new_best_path, save_predictions= True, cluster_info= cluster_info, setup="test",
-                        name = args.name)
+        compute_metrics(pl_model, trainer, checkpoint_name = new_best_path, data_dir = data_dir,  save_predictions= True, cluster_info= cluster_info, datasplit="test",
+                        num_workers=args.num_workers, name=args.name)
 
 if __name__ == "__main__":
     cfg =load_config("launch_scripts/train_params.yaml")
