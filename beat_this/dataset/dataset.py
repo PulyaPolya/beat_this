@@ -51,6 +51,9 @@ class BeatTrackingDataset(Dataset):
         self.train_length = train_length
         self.deterministic = deterministic
         self.augmentations = augmentations
+        self._use_bundles = True  # Start with bundles enabled
+        self._failed_bundles = set()
+
         self.length_based_oversampling_factor = length_based_oversampling_factor
         datasets = sorted(set(name.split("/", 1)[0] for name in item_names))
         # load dataset info
@@ -124,6 +127,11 @@ class BeatTrackingDataset(Dataset):
             / (stem + ".beats")
         )
         beat_annotation = np.loadtxt(annotation_path)
+        if beat_annotation.size == 0:
+            print(
+                    f"Skipping {item_name} because it has empty annotations."
+                )
+            return
         if beat_annotation.ndim == 2:
             beat_time = beat_annotation[:, 0]
             beat_value = beat_annotation[:, 1].astype(int)
@@ -153,13 +161,24 @@ class BeatTrackingDataset(Dataset):
         }
 
     def _get_spect(self, item):
-        try:
-            #dataset, filename = str(item["spect_path"]).split("/", 1)
-            spect_path = item["spect_path"]
-            dataset, filename = spect_path.parts[0], "/".join(spect_path.parts[1:])
-            spect = self.spects[dataset][filename[:-4]]
-        except KeyError:
-            spect = np.load(self.spect_basepath / item["spect_path"], mmap_mode="r")
+        spect_path = item["spect_path"]
+        dataset, filename = spect_path.parts[0], "/".join(spect_path.parts[1:])
+        
+        # Try bundle first (if not failed before)
+        if self._use_bundles and dataset not in self._failed_bundles:
+            try:
+                if dataset in self.spects:
+                    spect = self.spects[dataset][filename[:-4]]
+                    # CRITICAL: Validate shape to catch corruption early
+                    if spect.shape[0] > 0:  # Sanity check
+                        return spect
+            except (KeyError, OSError, ValueError, AttributeError) as e:
+                # Mark this bundle as problematic
+                self._failed_bundles.add(dataset)
+                print(f"Bundle {dataset} failed, switching to individual files: {e}")
+        
+        # Fallback to individual file (always works)
+        spect = np.load(self.spect_basepath / item["spect_path"], mmap_mode="r")
         return spect
 
     def get_frame_count(self, index):
@@ -179,77 +198,82 @@ class BeatTrackingDataset(Dataset):
 
     def __getitem__(self, index):
         if isinstance(index, (int, np.int64)):  # when index is a single int
-            item = self.items[index]
+            try:
+                item = self.items[index]
 
-            # select a pitch shift and time stretch
-            item = augment_pitchtempo(item, self.augmentations)
+                # select a pitch shift and time stretch
+                item = augment_pitchtempo(item, self.augmentations)
 
-            # load spectrogram
-            spect = self._get_spect(item)
+                # load spectrogram
+                spect = self._get_spect(item)
 
-            # define the excerpt to use
-            original_length = len(spect)
-            if self.train_length is not None:
-                longer = original_length - self.train_length
-            else:
-                longer = 0
-            if longer > 0:  # if the piece is longer than the desired length
-                if self.deterministic:
-                    # select the middle of the excerpt
-                    start_frame = longer // 2
+                # define the excerpt to use
+                original_length = len(spect)
+                if self.train_length is not None:
+                    longer = original_length - self.train_length
                 else:
-                    start_frame = np.random.randint(0, longer)
-                end_frame = start_frame + self.train_length
-            else:
-                start_frame = 0
-                end_frame = original_length
+                    longer = 0
+                if longer > 0:  # if the piece is longer than the desired length
+                    if self.deterministic:
+                        # select the middle of the excerpt
+                        start_frame = longer // 2
+                    else:
+                        start_frame = np.random.randint(0, longer)
+                    end_frame = start_frame + self.train_length
+                else:
+                    start_frame = 0
+                    end_frame = original_length
 
-            # obtain a view of the excerpt
-            spect = spect[start_frame:end_frame]
+                # obtain a view of the excerpt
+                spect = spect[start_frame:end_frame]
 
-            if "mask" in self.augmentations:
-                # copy the spectrogram and apply mask augmentation
-                spect = np.copy(spect)
-                spect = augment_mask_(spect, self.augmentations, self.fps)
-            else:
-                # only ensure we have a writeable array (so PyTorch is happy)
-                spect = np.require(spect, requirements="W")
+                if "mask" in self.augmentations:
+                    # copy the spectrogram and apply mask augmentation
+                    spect = np.copy(spect)
+                    spect = augment_mask_(spect, self.augmentations, self.fps)
+                else:
+                    # only ensure we have a writeable array (so PyTorch is happy)
+                    spect = np.require(spect, requirements="W")
 
-            # prepare annotations
-            (
-                framewise_truth_beat,
-                framewise_truth_downbeat,
-                truth_orig_beat,
-                truth_orig_downbeat,
-            ) = prepare_annotations(item, start_frame, end_frame, self.fps)
+                # prepare annotations
+                (
+                    framewise_truth_beat,
+                    framewise_truth_downbeat,
+                    truth_orig_beat,
+                    truth_orig_downbeat,
+                ) = prepare_annotations(item, start_frame, end_frame, self.fps)
 
-            # restructure the item dict with the correct training information
-            item = {
-                "spect": spect,
-                "spect_path": str(item["spect_path"]),
-                "dataset": item["dataset"],
-                "start_frame": start_frame,
-                "truth_beat": framewise_truth_beat,
-                "truth_downbeat": framewise_truth_downbeat,
-                "downbeat_mask": torch.as_tensor(item["downbeat_mask"]),
-                "padding_mask": (
-                    np.ones(self.train_length, dtype=bool)
-                    if self.train_length is not None
-                    else np.ones(original_length, dtype=bool)
-                ),
-                "truth_orig_beat": truth_orig_beat,
-                "truth_orig_downbeat": truth_orig_downbeat,
-            }
+                # restructure the item dict with the correct training information
+                #print(item["spect_path"])
+                item = {
+                    "spect": spect,
+                    "spect_path": str(item["spect_path"]),
+                    "dataset": item["dataset"],
+                    "start_frame": start_frame,
+                    "truth_beat": framewise_truth_beat,
+                    "truth_downbeat": framewise_truth_downbeat,
+                    "downbeat_mask": torch.as_tensor(item["downbeat_mask"]),
+                    "padding_mask": (
+                        np.ones(self.train_length, dtype=bool)
+                        if self.train_length is not None
+                        else np.ones(original_length, dtype=bool)
+                    ),
+                    "truth_orig_beat": truth_orig_beat,
+                    "truth_orig_downbeat": truth_orig_downbeat,
+                }
 
-            # pad all framewise tensors if needed
-            if longer < 0:
-                item["spect"] = np.pad(
-                    item["spect"], [(0, -longer), (0, 0)], constant_values=0
-                )
-                for k in "truth_beat", "truth_downbeat":
-                    item[k] = np.pad(item[k], [(0, -longer)], constant_values=0)
-                item["padding_mask"][longer:] = 0
-            return item
+                # pad all framewise tensors if needed
+                if longer < 0:
+                    item["spect"] = np.pad(
+                        item["spect"], [(0, -longer), (0, 0)], constant_values=0
+                    )
+                    for k in "truth_beat", "truth_downbeat":
+                        item[k] = np.pad(item[k], [(0, -longer)], constant_values=0)
+                    item["padding_mask"][longer:] = 0
+                return item
+            except Exception as e:
+                print(f"Error loading item {self.items[index]['spect_path']}: {e}")
+                return self.__getitem__((index + 1) % len(self))
 
         else:  # when index is a list of ints
             return [self[i] for i in index]
