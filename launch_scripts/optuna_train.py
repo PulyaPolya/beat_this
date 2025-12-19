@@ -54,8 +54,6 @@ class OptunaPruningCallbackWrapper(Callback):
     def check_pruned(self):
         """Expose the check_pruned method from the wrapped callback"""
         self.pruning_callback.check_pruned()
-        
-
     
     def state_dict(self):
         return {}
@@ -309,7 +307,7 @@ def objective(trial, args):
             "max_parts": 9,
         }
 
-    lr_hpo =  trial.suggest_float("lr", 3e-5, 1e-3, log = True) # 8e-6
+    lr_hpo =  trial.suggest_float("lr", 1e-5, 8e-4, log = True) # 8e-6
     weight_decay_hpo = trial.suggest_float("weight_decay", 1e-4, 1e-1, log = True)
     batch_size_hpo =  trial.suggest_categorical ("batch_size", [ 4, 8, 16])
     hpo_config = {
@@ -323,7 +321,7 @@ def objective(trial, args):
     freeze_layers_hpo = None
         
     if args.cluster_number:
-        checkpoint_epoch_hpo =  trial.suggest_categorical(
+        checkpoint_epoch_hpo = trial.suggest_categorical(
             "checkpoint", [60, 70,"best", 80, 90, 100]
         )
         freeze_layers_hpo = trial.suggest_int("freeze_layers", 0, 4)
@@ -467,20 +465,20 @@ def objective(trial, args):
     params = trial.params  # contains all current params *after suggestion*
     print(f"\n=== Trial {trial.number} ===")
     print("Parameters:", params)
-    # if trial.number == 0:
-    #     # validating the model in the very beginning
-    #     print(f"validating the model before")
-    #     val_results_start = trainer.validate(pl_model, datamodule=datamodule)
-    #     if logger is not None:
-    #         baseline_f = val_results_start[0]["val_F-measure_beat"]
-    #         for ep in range(args.max_epochs +1):
-    #             logger.log_metrics(
-    #                 {
-    #                     "epoch": ep,
-    #                     "val_F-measure_beat_baseline": baseline_f,
-    #                 },
-    #                 step=ep,  # aligns with epoch if you use epoch as x-axis in W&B
-    #             )
+    if trial.number == 0:
+        # validating the model in the very beginning
+        print(f"validating the model before")
+        val_results_start = trainer.validate(pl_model, datamodule=datamodule)
+        if logger is not None:
+            baseline_f = val_results_start[0]["val_F-measure_beat"]
+            for ep in range(args.max_epochs +1):
+                logger.log_metrics(
+                    {
+                        "epoch": ep,
+                        "val_F-measure_beat_baseline": baseline_f,
+                    },
+                    step=ep,  # aligns with epoch if you use epoch as x-axis in W&B
+                )
     
     try:
         trainer.fit(pl_model, datamodule)
