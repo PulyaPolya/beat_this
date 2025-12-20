@@ -260,7 +260,7 @@ def compute_metrics(model, trainer, checkpoint_name, data_dir, save_predictions 
 
 def load_checkpoint_resume(seed_folder, seed, epoch= None):
     seed_folder = seed_folder.replace("_SEED_", str(seed))
-    checkpoint_type = "best" if epoch == None else "periodic"
+    checkpoint_type = "best" if epoch == "best" else "periodic"
     checkpoint_folder = os.path.join(seed_folder, checkpoint_type)
     if checkpoint_type == "best":
         checkpoint = [check for check in os.listdir(checkpoint_folder) if "orig" in check][0]
