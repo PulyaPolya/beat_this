@@ -24,6 +24,9 @@ from pathlib import Path
 import torch.multiprocessing as mp
 import numpy as np
 from beat_this.inference import load_checkpoint
+import optuna 
+from copy import deepcopy
+import gc, torch
 
 def set_seed(seed=42):
     random.seed(seed)
@@ -180,6 +183,10 @@ class Config:
     #full_data : bool = False
     cluster_number : Optional[int]  = None
     clustering_config: Optional[str] = None
+    run_optuna_best: bool = False
+    study_name: Optional[str] = None
+    storage_path: Optional[str] = None
+
 
 
 def _load_yaml_or_json(path: Path) -> dict:
@@ -275,6 +282,16 @@ def load_checkpoint_resume(seed_folder, seed, epoch= None):
     else:
         ckpt = torch.load(checkpoint_path, map_location="cpu")
     return ckpt
+
+def get_optuna_params(study_name, storage_path, number = 1):
+    study = optuna.load_study(
+        study_name=study_name,
+        storage=storage_path
+    )
+    top_trials = sorted(study.trials, key=lambda t: t.value if t.value is not None else -float("inf"), reverse=True)
+    top_trial = top_trials[number]
+    return top_trial.params, top_trial.number
+
 
 def rename_key(key: str, insert: str) -> str:
     parts = key.split(".")
@@ -499,9 +516,26 @@ def main(args):
     if args.compute_metrics:
         compute_metrics(pl_model, trainer, checkpoint_name = new_best_path, data_dir = data_dir,  save_predictions= True, cluster_info= cluster_info, datasplit="test",
                         num_workers=args.num_workers, name=args.name)
+    if logger is not None:
+        logger.experiment.finish()
+    del trainer, pl_model, datamodule  
+    
 
 if __name__ == "__main__":
-    cfg =load_config("launch_scripts/train_params.yaml")
+    cfg0 =load_config("launch_scripts/train_params.yaml")
    # args = parser.parse_args()
-
-    main(cfg)
+    if cfg0.run_optuna_best :
+        base_name = cfg0.name
+        for i in range(3):
+            cfg = deepcopy(cfg0)
+            optuna_params, trial_number = get_optuna_params(study_name=cfg.study_name, storage_path=cfg.storage_path, number=i)
+            cfg.lr = optuna_params["lr"]
+            cfg.batch_size = optuna_params["batch_size"]
+            cfg.weight_decay = optuna_params["weight_decay"]
+            cfg.name += f"_trial_{trial_number}"
+            if cfg.clustering_config:
+                cfg.freeze_layers = optuna_params["freeze_layers"]
+                cfg.ckpt_epoch = optuna_params["checkpoint"]
+            main(cfg)
+            gc.collect()
+            torch.cuda.empty_cache()
