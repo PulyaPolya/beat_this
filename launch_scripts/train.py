@@ -165,7 +165,8 @@ class Config:
     val: bool = True
     hung_data: bool = False
     fold: Optional[int] = None
-    seed: int = 0
+    seed_list: List[int] = field(default_factory=lambda: [0])
+    seed: Optional[int] = None
     data_path : str = "data"
     checkpoint_path : str = "data"
     resume_checkpoint: bool = False
@@ -318,9 +319,10 @@ def rename_best_checkpoint(best_ckpt_path,  key_fragment="_orig_mod", save = Tru
 
 def main(args):
     # for reproducibility
-    seed_everything(args.seed, workers=True)
-    set_seed(args.seed)
     seed = args.seed
+    seed_everything(seed, workers=True)
+    set_seed(seed)
+    
     print("Starting  new run with the following parameters:")
     print(args)
 
@@ -449,8 +451,8 @@ def main(args):
    
     best_ckpt_cb = ModelCheckpoint(
         dirpath=os.path.join(checkpoint_folder, "best"),
-        filename=f"best-seed{seed}-{{epoch:02d}}-valf{{val_F-measure_beat:.4f}}",
-        monitor="val_F-measure_beat",
+        filename=f"best-seed{seed}-{{epoch:02d}}-valf{{val_F-measure_downbeat:.4f}}",
+        monitor="val_F-measure_downbeat",
         mode="max",
         save_top_k=1,                   # keep only the best
         save_last=False,                # optional; can set True if desired
@@ -459,7 +461,7 @@ def main(args):
     if args.use_early_stopping:
         callbacks.append(
             EarlyStopping(
-                monitor="val_F-measure_beat",    
+                monitor="val_F-measure_downbeat",    
                 mode="max",       
                 patience=max(1, int(math.ceil(args.es_patience / args.val_frequency))),  
                 min_delta=args.es_min_delta, 
@@ -497,6 +499,7 @@ def main(args):
             freeze_layers(args.freeze_layers, pl_model)
             total = sum(p.numel() for p in pl_model.parameters())
             trainable = sum(p.numel() for p in pl_model.parameters() if p.requires_grad)
+            print(f"Freezing first {args.freeze_layers} layers.")
             print(f"Trainable: {trainable:,} / {total:,}")
     
         # print(f"validating the model before")    # uncomment  for real runs!!!!
@@ -522,7 +525,7 @@ def main(args):
     
 
 if __name__ == "__main__":
-    cfg0 =load_config("launch_scripts/train_params.yaml")
+    cfg0 =load_config("launch_scripts/train_params_seeds.yaml")
    # args = parser.parse_args()
     if cfg0.run_optuna_best :
         base_name = cfg0.name
@@ -536,6 +539,14 @@ if __name__ == "__main__":
             if cfg.clustering_config:
                 cfg.freeze_layers = optuna_params["freeze_layers"]
                 cfg.ckpt_epoch = optuna_params["checkpoint"]
+            main(cfg)
+            gc.collect()
+            torch.cuda.empty_cache()
+    else:
+        for seed in cfg0.seed_list:
+            cfg = deepcopy(cfg0)
+            cfg.seed = seed
+            #cfg.name += f"_seed_{seed}"
             main(cfg)
             gc.collect()
             torch.cuda.empty_cache()
