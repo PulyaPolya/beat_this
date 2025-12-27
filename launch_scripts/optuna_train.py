@@ -410,13 +410,13 @@ def objective(trial, args):
     
     pruning_callback = OptunaPruningCallbackWrapper(
     trial=trial,
-    monitor="val_F-measure_downbeat",
+    monitor="val_F-measure_beat",
     )
     callbacks = [LearningRateMonitor(logging_interval="step"), pruning_callback]
     if args.use_early_stopping:
         callbacks.append(
             EarlyStopping(
-                monitor="val_F-measure_downbeat",    
+                monitor="val_F-measure_beat",    
                 mode="max",       
                 patience=max(1, int(math.ceil(args.es_patience / args.val_frequency))),  
                 min_delta=args.es_min_delta, 
@@ -470,12 +470,12 @@ def objective(trial, args):
         print(f"validating the model before")
         val_results_start = trainer.validate(pl_model, datamodule=datamodule)
         if logger is not None:
-            baseline_f = val_results_start[0]["val_F-measure_downbeat"]
+            baseline_f = val_results_start[0]["val_F-measure_beat"]
             for ep in range(args.max_epochs +1):
                 logger.log_metrics(
                     {
                         "epoch": ep,
-                        "val_F-measure_downbeat_baseline": baseline_f,
+                        "val_F-measure_beat_baseline": baseline_f,
                     },
                     step=ep,  # aligns with epoch if you use epoch as x-axis in W&B
                 )
@@ -486,8 +486,8 @@ def objective(trial, args):
         val_results = trainer.validate(pl_model, datamodule=datamodule)
         # if logger is not None:
         #     logger.experiment.finish()
-        print(f"val f score is {val_results[0]['val_F-measure_downbeat']}")
-        return val_results[0]["val_F-measure_downbeat"]
+        print(f"val f score is {val_results[0]['val_F-measure_beat']}")
+        return val_results[0]["val_F-measure_beat"]
     except optuna.TrialPruned:
         print(f"Trial {trial.number} was pruned")
         raise
@@ -512,7 +512,7 @@ def main(args):
                                 direction= "maximize",
                                 sampler = sampler,
                                 pruner = pruner,
-                                storage = "sqlite:///optuna_down.db",
+                                storage = "sqlite:///optuna_new.db",
                                 load_if_exists=True )
     study.optimize(lambda trial: objective(trial, args), n_trials = args.num_trials,  callbacks=[SaveSamplerCallback(f"sampler_{args.name}.pkl")])
     with open(f"sampler_{args.name}.pkl", "wb") as fout:

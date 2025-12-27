@@ -3,6 +3,7 @@ import itertools
 import json
 import re
 from pathlib import Path
+import os
 
 import numpy as np
 import pandas as pd
@@ -39,6 +40,7 @@ class BeatTrackingDataset(Dataset):
         self,
         item_names: list[str],
         data_folder,
+        fallback_path = None,
         spect_fps=50,
         train_length=1500,
         deterministic=False,
@@ -46,18 +48,27 @@ class BeatTrackingDataset(Dataset):
         length_based_oversampling_factor=0,
     ):
         self.spect_basepath = data_folder / "audio" / "spectrograms"
+        self.fallback_path = fallback_path
         self.annotation_basepath = data_folder / "annotations"
         self.fps = spect_fps
         self.train_length = train_length
         self.deterministic = deterministic
         self.augmentations = augmentations
-        self._use_bundles = True  # Start with bundles enabled
-        self._failed_bundles = set()
+        self._use_bundles =True  # Start with bundles enabled
+        #self._failed_bundles = set()
+        self._bundle_paths = {}  # Stores Path objects to .npz files
+        self._worker_spects = {}  # Will be populated per-worker
+        self._worker_id = None   # Track which worker we're in
 
         self.length_based_oversampling_factor = length_based_oversampling_factor
         datasets = sorted(set(name.split("/", 1)[0] for name in item_names))
         # load dataset info
         self.dataset_info = self._load_dataset_infos(datasets)
+        for dataset in datasets:
+            npz_file = (self.spect_basepath / dataset).with_suffix(".npz")
+            if npz_file.exists():
+                self._bundle_paths[dataset] = npz_file
+                #print(f"Found bundle for {dataset}: {npz_file}")
         #print(item_names)
         # load .npz spectrogram bundles, if any
         self.spects = self._load_spect_bundles(datasets)
@@ -83,6 +94,34 @@ class BeatTrackingDataset(Dataset):
             )
             items = oversampled_items
         self.items = items
+
+    def _get_worker_spects(self):
+        """
+        CRITICAL: Open bundle files in the worker process.
+        Each worker gets its own file handles to avoid segfaults.
+        
+        This function is called from within DataLoader workers.
+        It checks the process ID and opens fresh file handles if needed.
+        """
+        import os
+        from .mmnpz import MemmappedNpzFile
+        
+        worker_id = os.getpid()  # Use process ID to identify worker
+        
+        # If we're in a different worker (or first time), open files
+        if self._worker_id != worker_id:
+            self._worker_id = worker_id
+            self._worker_spects = {}
+            
+            # Open bundle files in THIS worker process
+            for dataset, bundle_path in self._bundle_paths.items():
+                try:
+                    self._worker_spects[dataset] = MemmappedNpzFile(bundle_path)
+                    print(f"Worker {worker_id}: Opened bundle for {dataset}")
+                except Exception as e:
+                    print(f"Worker {worker_id}: Failed to open bundle {dataset}: {e}")
+        
+        return self._worker_spects
 
     def _load_dataset_infos(self, datasets):
         dataset_info = {}
@@ -165,20 +204,29 @@ class BeatTrackingDataset(Dataset):
         dataset, filename = spect_path.parts[0], "/".join(spect_path.parts[1:])
         
         # Try bundle first (if not failed before)
-        if self._use_bundles and dataset not in self._failed_bundles:
+        if self._use_bundles and dataset in self._bundle_paths:
             try:
-                if dataset in self.spects:
-                    spect = self.spects[dataset][filename[:-4]]
-                    # CRITICAL: Validate shape to catch corruption early
-                    if spect.shape[0] > 0:  # Sanity check
+                worker_spects = self._get_worker_spects()
+            
+                if dataset in worker_spects:
+                    spect = worker_spects[dataset][filename[:-4]]
+                    
+                    # Validate shape to catch corruption early
+                    if spect.shape[0] > 0 and len(spect.shape) == 2:
                         return spect
-            except (KeyError, OSError, ValueError, AttributeError) as e:
-                # Mark this bundle as problematic
-                self._failed_bundles.add(dataset)
-                print(f"Bundle {dataset} failed, switching to individual files: {e}")
-        
+                    else:
+                        raise ValueError(f"Invalid spectrogram shape: {spect.shape}")
+            except KeyError as e:
+                # File not in bundle
+                raise FileNotFoundError(
+                    f"Spectrogram '{filename[:-4]}' not found in bundle '{dataset}'"
+                ) from e
+            except Exception as e:
+                # Other errors - log and fall through to individual file
+                print(f"Worker {os.getpid()}: Bundle {dataset} failed for {filename}: {e}")
+        print("using a fallback")
         # Fallback to individual file (always works)
-        spect = np.load(self.spect_basepath / item["spect_path"], mmap_mode="r")
+        spect = np.load(self.fallback_path / item["spect_path"], mmap_mode="r")
         return spect
 
     def get_frame_count(self, index):
@@ -273,6 +321,7 @@ class BeatTrackingDataset(Dataset):
                 return item
             except Exception as e:
                 print(f"Error loading item {self.items[index]['spect_path']}: {e}")
+                raise
                 return self.__getitem__((index + 1) % len(self))
 
         else:  # when index is a list of ints
@@ -303,6 +352,7 @@ class BeatDataModule(pl.LightningDataModule):
     def __init__(
         self,
         data_dir,
+        fallback_path = None,
         batch_size=8,
         train_length=1500,
         num_workers=20,
@@ -323,6 +373,7 @@ class BeatDataModule(pl.LightningDataModule):
         self.initialized = {}
         # remember all arguments
         self.data_dir = Path(data_dir)
+        self.fallback_path = fallback_path
         self.batch_size = batch_size
         self.train_length = train_length
         self.num_workers = num_workers
@@ -403,6 +454,7 @@ class BeatDataModule(pl.LightningDataModule):
         if stage in ("fit", "validate"):
             self.val_dataset = BeatTrackingDataset(
                 self.val_items,
+                fallback_path=self.fallback_path,
                 deterministic=True,
                 augmentations={},
                 train_length=self.train_length,
@@ -421,6 +473,7 @@ class BeatDataModule(pl.LightningDataModule):
         if stage == "fit":
             self.train_dataset = BeatTrackingDataset(
                 self.train_items,
+                fallback_path=self.fallback_path,
                 deterministic=False,
                 augmentations=self.augmentations,
                 train_length=self.train_length,
@@ -447,6 +500,7 @@ class BeatDataModule(pl.LightningDataModule):
             )
             self.test_dataset = BeatTrackingDataset(
                 self.test_items,
+                fallback_path=self.fallback_path,
                 deterministic=True,
                 augmentations={},
                 train_length=None,
@@ -474,6 +528,7 @@ class BeatDataModule(pl.LightningDataModule):
                 # for prediction, we want to use full items (train_length=None)
                 self.predict_dataset = BeatTrackingDataset(
                     items,
+                    fallback_path=self.fallback_path,
                     deterministic=True,
                     augmentations={},
                     train_length=None,

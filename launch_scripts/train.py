@@ -27,6 +27,7 @@ from beat_this.inference import load_checkpoint
 import optuna 
 from copy import deepcopy
 import gc, torch
+import multiprocessing
 
 def set_seed(seed=42):
     random.seed(seed)
@@ -165,6 +166,7 @@ class Config:
     val: bool = True
     hung_data: bool = False
     fold: Optional[int] = None
+    # when running with multiple seeds, can pass a list
     seed_list: List[int] = field(default_factory=lambda: [0])
     seed: Optional[int] = None
     data_path : str = "data"
@@ -176,17 +178,24 @@ class Config:
     ## only used for continuing training
     checkpoints_folder: Optional[str] = None
     freeze_layers: Optional[int] = None
+    # for the full-data model, to save intermediate checkpoints
     save_frequency: Optional[int] = None
+    # early stopping parameters
     use_early_stopping: bool = False                              
     es_patience: int = 10                    
     es_min_delta: float = 0.001   
     compute_metrics: bool =  False
     #full_data : bool = False
+    # parameters that define clsutering configuration
     cluster_number : Optional[int]  = None
     clustering_config: Optional[str] = None
+    # if we want to run top 3 optuna best trials
     run_optuna_best: bool = False
     study_name: Optional[str] = None
     storage_path: Optional[str] = None
+    # monitor either beat or downbeat
+    objective: Optional[str] = "beat"
+    fallback_path : Optional[str] = None
 
 
 
@@ -373,6 +382,7 @@ def main(args):
 
     datamodule = BeatDataModule(
         data_dir,
+        fallback_path = args.fallback_path,
         batch_size=args.batch_size,
         train_length=args.train_length,
         spect_fps=args.fps,
@@ -436,6 +446,8 @@ def main(args):
     else:
         save_top_k = 1
         every_n_epochs=args.val_frequency
+    monitor = f"val_F-measure_{args.objective}"
+    metric_placeholder = "{" +monitor + ":.4f}"
     if args.save_frequency:
         periodic_ckpt_cb =(
         ModelCheckpoint(
@@ -447,12 +459,10 @@ def main(args):
             )
          )
         callbacks.append(periodic_ckpt_cb)
-            
-   
     best_ckpt_cb = ModelCheckpoint(
         dirpath=os.path.join(checkpoint_folder, "best"),
-        filename=f"best-seed{seed}-{{epoch:02d}}-valf{{val_F-measure_downbeat:.4f}}",
-        monitor="val_F-measure_downbeat",
+        filename=(f"best-seed{seed}-{args.objective}-" "{epoch:02d}-" f"{metric_placeholder}"),
+        monitor=monitor,
         mode="max",
         save_top_k=1,                   # keep only the best
         save_last=False,                # optional; can set True if desired
@@ -461,7 +471,7 @@ def main(args):
     if args.use_early_stopping:
         callbacks.append(
             EarlyStopping(
-                monitor="val_F-measure_downbeat",    
+                monitor=monitor,    
                 mode="max",       
                 patience=max(1, int(math.ceil(args.es_patience / args.val_frequency))),  
                 min_delta=args.es_min_delta, 
@@ -525,7 +535,7 @@ def main(args):
     
 
 if __name__ == "__main__":
-    cfg0 =load_config("launch_scripts/train_params_seeds.yaml")
+    cfg0 =load_config("launch_scripts/train_params.yaml")
    # args = parser.parse_args()
     if cfg0.run_optuna_best :
         base_name = cfg0.name
