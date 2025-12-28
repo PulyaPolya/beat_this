@@ -367,6 +367,7 @@ class BeatDataModule(pl.LightningDataModule):
         length_based_oversampling_factor=0,
         fold=None,
         predict_datasplit="test",
+        files = None
     ):
         super().__init__()
         self.save_hyperparameters()
@@ -387,6 +388,13 @@ class BeatDataModule(pl.LightningDataModule):
         self.length_based_oversampling_factor = length_based_oversampling_factor
         self.fold = fold
         self.predict_datasplit = predict_datasplit
+        self.files = files
+
+    def check_file(self, file):
+        if self.files:
+            return True if file in self.files else False
+        else:
+            return True
 
     def setup(self, stage):
         if self.initialized.get(stage, False):
@@ -422,14 +430,14 @@ class BeatDataModule(pl.LightningDataModule):
                         f"{dataset}/{stem}"
                         for stem in split.piece[split.part != self.fold]
                     )
-                else:
+                else:           
                     # single split: marked as val and train
                     self.val_items.extend(
-                        f"{dataset}/{stem}" for stem in split.piece[split.part == "val"]
+                        f"{dataset}/{stem}" for stem in split.piece[split.part == "val"] if self.check_file(dataset + "_" + stem)
                     )
                     self.train_items.extend(
                         f"{dataset}/{stem}"
-                        for stem in split.piece[split.part == "train"]
+                        for stem in split.piece[split.part == "train"] if self.check_file(dataset + "_" + stem)
                     )
             if self.no_val:
                 # Train on all available data (excluding the test set).
@@ -496,7 +504,7 @@ class BeatDataModule(pl.LightningDataModule):
             )
             self.test_items = sorted(
                 f"{self.test_set_name}/{item.stem}"
-                for item in test_annotations_dir.glob("*.beats")
+                for item in test_annotations_dir.glob("*.beats") if self.check_file(self.test_set_name + "_" + item.stem)
             )
             self.test_dataset = BeatTrackingDataset(
                 self.test_items,

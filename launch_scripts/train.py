@@ -27,7 +27,7 @@ from beat_this.inference import load_checkpoint
 import optuna 
 from copy import deepcopy
 import gc, torch
-import multiprocessing
+import pandas as pd
 
 def set_seed(seed=42):
     random.seed(seed)
@@ -132,6 +132,15 @@ class PlateauUnfreeze(Callback):
         # lr =trainer.optimizers[0].param_groups[0]["lr"]
         # trainer.logger.log_metrics({"lr": lr}, step=trainer.global_step)
 
+class DelayedCheckpoint(ModelCheckpoint):
+    def __init__(self, start_epoch: int = 70, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.start_epoch = start_epoch
+
+    def on_validation_end(self, trainer, pl_module):
+        if trainer.current_epoch >= self.start_epoch:
+            super().on_validation_end(trainer, pl_module)
+
 @dataclass
 class Config:
     name: str = ""
@@ -196,6 +205,7 @@ class Config:
     # monitor either beat or downbeat
     objective: Optional[str] = "beat"
     fallback_path : Optional[str] = None
+    cluster_files_df: Optional[str] = None
 
 
 
@@ -356,9 +366,17 @@ def main(args):
         torch.backends.cuda.enable_math_sdp(False)
     if args.cluster_number:
         print(f"Using data from cluster number {args.cluster_number}")
-        data_dir =Path(os.path.join(args.data_path, args.clustering_config, f"cluster_{args.cluster_number}")) / "data" #Path(__file__).parent.parent.relative_to(Path.cwd()) / "data"
+        #data_dir =Path(os.path.join(args.data_path, args.clustering_config, f"cluster_{args.cluster_number}")) / "data" #Path(__file__).parent.parent.relative_to(Path.cwd()) / "data"
+        #if args.cluster_files_df:
+        df = pd.read_csv(args.cluster_files_df)
+        df_filtered = df[df["label"].str.contains(str(args.cluster_number))]
+        cluster_files = list(df_filtered ["file"].values)
+        cluster_files = [file.replace("___", "_") for file in cluster_files]
     else:
-        data_dir =Path(args.data_path) / "data" 
+        cluster_files = None
+        
+    #else:
+    data_dir =Path(args.data_path) / "data" 
     print(data_dir)
     
     #checkpoint_dir = Path(args.checkpoint_path) 
@@ -379,9 +397,10 @@ def main(args):
             "min_parts": 5,
             "max_parts": 9,
         }
-
+    
     datamodule = BeatDataModule(
         data_dir,
+        files = cluster_files,
         fallback_path = args.fallback_path,
         batch_size=args.batch_size,
         train_length=args.train_length,
@@ -440,24 +459,18 @@ def main(args):
         #data_path_parts = args.data_path.split(os.sep)
         cluster_info = [args.clustering_config, str(args.cluster_number)]
         checkpoint_folder = os.path.join(args.checkpoint_path,cluster_info[0], cluster_info[1], f"{args.name}S{seed}{params_str}".strip() )
-    if args.save_frequency:
-        save_top_k = -1
-        every_n_epochs=args.save_frequency
-    else:
-        save_top_k = 1
-        every_n_epochs=args.val_frequency
+
     monitor = f"val_F-measure_{args.objective}"
     metric_placeholder = "{" +monitor + ":.4f}"
     if args.save_frequency:
-        periodic_ckpt_cb =(
-        ModelCheckpoint(
-                dirpath=os.path.join(checkpoint_folder, "periodic"),
-                filename="{epoch:02d}-valf{val_F-measure_beat:.4f}",
-                save_top_k=save_top_k,
-                monitor=None,
-                every_n_epochs=every_n_epochs,
-            )
-         )
+        periodic_ckpt_cb = DelayedCheckpoint(
+            start_epoch=60,
+            dirpath=os.path.join(checkpoint_folder, "periodic"),
+            filename="{epoch:02d}-valf{val_F-measure_beat:.4f}",
+            save_top_k=-1,
+            monitor=None,
+            every_n_epochs=args.save_frequency,   # 10
+        )
         callbacks.append(periodic_ckpt_cb)
     best_ckpt_cb = ModelCheckpoint(
         dirpath=os.path.join(checkpoint_folder, "best"),
@@ -535,7 +548,7 @@ def main(args):
     
 
 if __name__ == "__main__":
-    cfg0 =load_config("launch_scripts/train_params.yaml")
+    cfg0 =load_config("launch_scripts/train_params_seeds.yaml")
    # args = parser.parse_args()
     if cfg0.run_optuna_best :
         base_name = cfg0.name
@@ -556,7 +569,6 @@ if __name__ == "__main__":
         for seed in cfg0.seed_list:
             cfg = deepcopy(cfg0)
             cfg.seed = seed
-            #cfg.name += f"_seed_{seed}"
             main(cfg)
             gc.collect()
             torch.cuda.empty_cache()
