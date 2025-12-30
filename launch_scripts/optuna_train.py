@@ -21,6 +21,7 @@ import yaml
 import torch.nn as nn
 import random
 import numpy as np
+import pandas as pd
 import optuna
 from optuna.integration import PyTorchLightningPruningCallback
 import pickle
@@ -217,6 +218,7 @@ class Config:
     clustering_config: Optional[str] = None
     num_trials : int = 1
     sampler_path: Optional[str] = None
+    cluster_files_df: Optional[str] = None
 
 def _load_yaml_or_json(path: Path) -> dict:
     raw = path.read_text()
@@ -285,11 +287,15 @@ def objective(trial, args):
     set_seed(args.seed)
     if args.cluster_number:
         print(f"Using data from cluster number {args.cluster_number}")
-        data_dir =Path(os.path.join(args.data_path, args.clustering_config, f"cluster_{args.cluster_number}")) / "data" #Path(__file__).parent.parent.relative_to(Path.cwd()) / "data"
+        df = pd.read_csv(args.cluster_files_df)
+        df_filtered = df[df["label"].str.contains(str(args.cluster_number))]
+        cluster_files = list(df_filtered ["file"].values)
+        cluster_files = [file.replace("___", "_") for file in cluster_files]
     else:
-        data_dir =Path(args.data_path) / "data" 
+        cluster_files = None
+    data_dir =Path(args.data_path) / "data" 
     print(data_dir)
-
+    
     augmentations = {}
     if args.tempo_augmentation:
         augmentations["tempo"] = {"min": -20, "max": 20, "stride": 4}
@@ -330,6 +336,7 @@ def objective(trial, args):
         
     datamodule = BeatDataModule(
         data_dir,
+        files = cluster_files,
         batch_size=batch_size_hpo,
         train_length=args.train_length,
         spect_fps=args.fps,

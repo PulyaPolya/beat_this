@@ -548,7 +548,7 @@ def main(args):
     
 
 if __name__ == "__main__":
-    cfg0 =load_config("launch_scripts/train_params_seeds.yaml")
+    cfg0 =load_config("launch_scripts/train_params_baseline_trial_12.yaml")
    # args = parser.parse_args()
     if cfg0.run_optuna_best :
         base_name = cfg0.name
