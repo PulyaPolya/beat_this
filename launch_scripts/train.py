@@ -206,6 +206,7 @@ class Config:
     objective: Optional[str] = "beat"
     fallback_path : Optional[str] = None
     cluster_files_df: Optional[str] = None
+    trial_number: Optional[int] = None
 
 
 
@@ -312,6 +313,21 @@ def get_optuna_params(study_name, storage_path, number = 1):
     top_trial = top_trials[number]
     return top_trial.params, top_trial.number
 
+def set_trial_params(cfg):
+    study = optuna.load_study(
+        study_name=cfg.study_name,
+        storage=cfg.storage_path
+    )
+    trial = study.trials[cfg.trial_number]
+    print(f"setting trial params {trial.params}")
+    cfg.lr = trial.params["lr"]
+    cfg.batch_size = trial.params["batch_size"]
+    cfg.weight_decay = trial.params["weight_decay"]
+    cfg.name += f"_trial_{cfg.trial_number}"
+    if cfg.clustering_config:
+        cfg.freeze_layers = trial.params["freeze_layers"]
+        cfg.ckpt_epoch = trial.params["checkpoint"]
+    return cfg
 
 def rename_key(key: str, insert: str) -> str:
     parts = key.split(".")
@@ -548,26 +564,22 @@ def main(args):
     
 
 if __name__ == "__main__":
-    cfg0 =load_config("launch_scripts/train_params_baseline_trial_12.yaml")
+    cfg0 =load_config("launch_scripts/train_params_seeds.yaml")
+    cfg = deepcopy(cfg0)
    # args = parser.parse_args()
     if cfg0.run_optuna_best :
         base_name = cfg0.name
         for i in range(3):
-            cfg = deepcopy(cfg0)
             optuna_params, trial_number = get_optuna_params(study_name=cfg.study_name, storage_path=cfg.storage_path, number=i)
-            cfg.lr = optuna_params["lr"]
-            cfg.batch_size = optuna_params["batch_size"]
-            cfg.weight_decay = optuna_params["weight_decay"]
-            cfg.name += f"_trial_{trial_number}"
-            if cfg.clustering_config:
-                cfg.freeze_layers = optuna_params["freeze_layers"]
-                cfg.ckpt_epoch = optuna_params["checkpoint"]
+            cfg.trial_number = trial_number
+            cfg = set_trial_params(cfg)
             main(cfg)
             gc.collect()
             torch.cuda.empty_cache()
     else:
+        if cfg0.trial_number:
+            cfg = set_trial_params(cfg)
         for seed in cfg0.seed_list:
-            cfg = deepcopy(cfg0)
             cfg.seed = seed
             main(cfg)
             gc.collect()
