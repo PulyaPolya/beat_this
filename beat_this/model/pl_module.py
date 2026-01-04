@@ -126,6 +126,11 @@ class PLBeatThis(LightningModule):
 
         # concatenate dictionaries
         metrics = {**metrics_beat, **metrics_downbeat}
+        if "F-measure_beat" in metrics and "F-measure_downbeat" in metrics:
+            metrics["F-measure_avg"] = 0.5 * (
+                metrics["F-measure_beat"] + metrics["F-measure_downbeat"]
+            )
+
 
         return metrics
 

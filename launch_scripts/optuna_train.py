@@ -107,63 +107,6 @@ def freeze_layers(num_to_freeze, pl_model):
 
     set_bn_eval_by_prefix(pl_model, layers_to_freeze)
 
-class PlateauUnfreeze(Callback):
-    def __init__(self, monitor="val_f1", mode="max", patience=1,  lr_backbone=1e-5):
-        super().__init__()
-        self.monitor = monitor
-        self.mode = mode
-        self.patience = patience
-        #self.get_blocks_fn = get_blocks_fn
-        self.lr_backbone = lr_backbone
-        self.best = -float("inf") if mode=="max" else float("inf")
-        self.bad_epochs = 0
-        self._num_unfrozen = 0
-        self._layers = None
-
-    def on_fit_start(self, trainer, pl_module):
-        # Discover your exact stack once:
-        # model.transformer_blocks._orig_mod.layers is a ModuleList
-        self._layers = list(pl_module.model.transformer_blocks._orig_mod.layers)
-        self._report_trainable(pl_module, prefix=" (start)")
-    
-    def _report_trainable(self, pl_module, prefix=""):
-        total = sum(p.numel() for p in pl_module.parameters())
-        trainable = sum(p.numel() for p in pl_module.parameters() if p.requires_grad)
-        print(f"[PlateauUnfreeze]{prefix} Trainable: {trainable:,} / {total:,} ({100*trainable/total:.2f}%)")
-
-    def on_validation_end(self, trainer, pl_module):
-        metrics = trainer.callback_metrics
-        if self.monitor not in metrics:
-            return
-        current = metrics[self.monitor].item()
-
-        improved = (current > self.best) if self.mode=="max" else (current < self.best)
-        if improved:
-            self.best = current
-            self.bad_epochs = 0
-            return
-
-        self.bad_epochs += 1
-        if self.bad_epochs < self.patience:
-            return
-        #print("unfreezing new layers")
-        # Unfreeze next block
-        unfrozen = sum(any(p.requires_grad for p in L.parameters()) for L in self._layers)
-        next_idx = len(self._layers) - 1 - unfrozen
-        if next_idx < 0:
-            return  # nothing left to unfreeze
-        
-        prefix = f"model.transformer_blocks._orig_mod.layers.{next_idx}."
-        new_params = unfreeze_by_prefix(pl_module, prefix)
-        # if new_params:
-        #     trainer.optimizers[0].add_param_group({"params": new_params, "lr": self.lr_backbone})
-        self._num_unfrozen += 1
-        self.bad_epochs = 0
-        self._report_trainable(pl_module, prefix=f" (after unfreezing layer {next_idx})")
-        # trainer.logger.log_metrics({"unfrozen_blocks": self._num_unfrozen}, step=trainer.global_step)
-
-        # lr =trainer.optimizers[0].param_groups[0]["lr"]
-        # trainer.logger.log_metrics({"lr": lr}, step=trainer.global_step)
 
 @dataclass
 class Config:
@@ -219,6 +162,7 @@ class Config:
     num_trials : int = 1
     sampler_path: Optional[str] = None
     cluster_files_df: Optional[str] = None
+    objective: Optional[str] = "beat"
 
 def _load_yaml_or_json(path: Path) -> dict:
     raw = path.read_text()
@@ -313,7 +257,7 @@ def objective(trial, args):
             "max_parts": 9,
         }
 
-    lr_hpo =  trial.suggest_float("lr", 1e-5, 8e-4, log = True) # 8e-6
+    lr_hpo =  trial.suggest_float("lr", 1e-5, 8e-3, log = True) #trial.suggest_float("lr", 1e-5, 8e-4, log = True) # 8e-6
     weight_decay_hpo = trial.suggest_float("weight_decay", 1e-4, 1e-1, log = True)
     batch_size_hpo =  trial.suggest_categorical ("batch_size", [ 4, 8, 16])
     hpo_config = {
@@ -394,12 +338,12 @@ def objective(trial, args):
         n_layers=args.n_layers,
         stem_dim=32,
         dropout=dropout,
-        lr=lr_hpo,   #args.lr,
-        weight_decay= weight_decay_hpo,#args.weight_decay,
+        lr=lr_hpo,   
+        weight_decay= weight_decay_hpo,
         pos_weights=pos_weights,
         head_dim=32,
         loss_type=args.loss,
-        warmup_steps=args.warmup_steps, #args.warmup_steps,
+        warmup_steps=args.warmup_steps, 
         max_epochs=args.max_epochs,
         use_dbn=args.dbn,
         eval_trim_beats=args.eval_trim_beats,
@@ -414,16 +358,16 @@ def objective(trial, args):
         else:
             raise ValueError("The model is missing the part", part, "to compile")
 
-    
+    metric = f"val_F-measure_{args.objective}"
     pruning_callback = OptunaPruningCallbackWrapper(
     trial=trial,
-    monitor="val_F-measure_beat",
+    monitor=metric,
     )
     callbacks = [LearningRateMonitor(logging_interval="step"), pruning_callback]
     if args.use_early_stopping:
         callbacks.append(
             EarlyStopping(
-                monitor="val_F-measure_beat",    
+                monitor=metric,    
                 mode="max",       
                 patience=max(1, int(math.ceil(args.es_patience / args.val_frequency))),  
                 min_delta=args.es_min_delta, 
@@ -469,23 +413,23 @@ def objective(trial, args):
             total = sum(p.numel() for p in pl_model.parameters())
             trainable = sum(p.numel() for p in pl_model.parameters() if p.requires_grad)
             print(f"Trainable: {trainable:,} / {total:,}")
+        if trial.number == 0:
+        # validating the model in the very beginning
+            print(f"validating the model before")
+            val_results_start = trainer.validate(pl_model, datamodule=datamodule)
+            if logger is not None:
+                baseline_f = val_results_start[0][metric]
+                for ep in range(args.max_epochs +1):
+                    logger.log_metrics(
+                        {
+                            "epoch": ep,
+                            f"{metric}_baseline": baseline_f,
+                        },
+                        step=ep,  # aligns with epoch if you use epoch as x-axis in W&B
+                    )
     params = trial.params  # contains all current params *after suggestion*
     print(f"\n=== Trial {trial.number} ===")
     print("Parameters:", params)
-    if trial.number == 0:
-        # validating the model in the very beginning
-        print(f"validating the model before")
-        val_results_start = trainer.validate(pl_model, datamodule=datamodule)
-        if logger is not None:
-            baseline_f = val_results_start[0]["val_F-measure_beat"]
-            for ep in range(args.max_epochs +1):
-                logger.log_metrics(
-                    {
-                        "epoch": ep,
-                        "val_F-measure_beat_baseline": baseline_f,
-                    },
-                    step=ep,  # aligns with epoch if you use epoch as x-axis in W&B
-                )
     
     try:
         trainer.fit(pl_model, datamodule)
@@ -493,8 +437,8 @@ def objective(trial, args):
         val_results = trainer.validate(pl_model, datamodule=datamodule)
         # if logger is not None:
         #     logger.experiment.finish()
-        print(f"val f score is {val_results[0]['val_F-measure_beat']}")
-        return val_results[0]["val_F-measure_beat"]
+        print(f"{metric}result f score is {val_results[0][metric]}")
+        return val_results[0][metric]
     except optuna.TrialPruned:
         print(f"Trial {trial.number} was pruned")
         raise
@@ -506,7 +450,7 @@ def objective(trial, args):
 def main(args):
     # don't prune first 5 trials and wait 3 epochs to prune
     # changed!!!!!
-    pruner = optuna.pruners.MedianPruner(n_warmup_steps=8, n_startup_trials = 10)
+    pruner = optuna.pruners.MedianPruner(n_warmup_steps=5, n_startup_trials = 10)
     
     if args.sampler_path:
         print(f"Loading a sampler from path {args.sampler_path}")
@@ -519,14 +463,14 @@ def main(args):
                                 direction= "maximize",
                                 sampler = sampler,
                                 pruner = pruner,
-                                storage = "sqlite:///optuna_new.db",
+                                storage = "sqlite:///optuna_joint.db",
                                 load_if_exists=True )
     study.optimize(lambda trial: objective(trial, args), n_trials = args.num_trials,  callbacks=[SaveSamplerCallback(f"sampler_{args.name}.pkl")])
     with open(f"sampler_{args.name}.pkl", "wb") as fout:
             pickle.dump(study.sampler, fout)
 
 if __name__ == "__main__":
-    cfg =load_config("launch_scripts/optuna_train_params.yaml")
+    cfg =load_config("launch_scripts/optuna_train_params_full.yaml")
    # args = parser.parse_args()
 
     main(cfg)
