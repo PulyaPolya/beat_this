@@ -313,7 +313,7 @@ def get_optuna_params(study_name, storage_path, number = 1):
     top_trial = top_trials[number]
     return top_trial.params, top_trial.number
 
-def set_trial_params(cfg):
+def set_trial_params(cfg, base_name):
     study = optuna.load_study(
         study_name=cfg.study_name,
         storage=cfg.storage_path
@@ -323,7 +323,7 @@ def set_trial_params(cfg):
     cfg.lr = trial.params["lr"]
     cfg.batch_size = trial.params["batch_size"]
     cfg.weight_decay = trial.params["weight_decay"]
-    cfg.name += f"_trial_{cfg.trial_number}"
+    cfg.name = base_name + f"_trial_{cfg.trial_number}"
     if cfg.clustering_config:
         cfg.freeze_layers = trial.params["freeze_layers"]
         cfg.ckpt_epoch = trial.params["checkpoint"]
@@ -564,7 +564,7 @@ def main(args):
     
 
 if __name__ == "__main__":
-    cfg0 =load_config("launch_scripts/train_params_seeds.yaml")
+    cfg0 =load_config("launch_scripts/train_params.yaml")
     cfg = deepcopy(cfg0)
    # args = parser.parse_args()
     if cfg0.run_optuna_best :
@@ -572,11 +572,12 @@ if __name__ == "__main__":
         for i in range(3):
             optuna_params, trial_number = get_optuna_params(study_name=cfg.study_name, storage_path=cfg.storage_path, number=i)
             cfg.trial_number = trial_number
-            cfg = set_trial_params(cfg)
+            cfg = set_trial_params(cfg, base_name)
             main(cfg)
             gc.collect()
             torch.cuda.empty_cache()
     else:
+        
         if cfg0.trial_number:
             cfg = set_trial_params(cfg)
         for seed in cfg0.seed_list:
