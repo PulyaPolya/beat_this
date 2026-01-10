@@ -14,6 +14,7 @@ from collections import OrderedDict
 import json
 import torch
 from pathlib import Path
+from copy import deepcopy
 
 # for repeatability
 seed_everything(0, workers=True)
@@ -21,10 +22,14 @@ seed_everything(0, workers=True)
 
 def main(args):
     if len(args.models) == 1:
-        print("Single model prediction for", args.models[0])
+       
         # single model prediction
-        checkpoint_path = args.models[0]
+        checkpoint_folder = args.models[0]
+        checkpoint_folder = checkpoint_folder.replace("_SEED_", str(args.seed))
+        checkpoint = [check for check in os.listdir(checkpoint_folder) if f"epoch={args.epoch-1}" in check][0]
+        checkpoint_path = os.path.join(checkpoint_folder, checkpoint)
         checkpoint = load_checkpoint(checkpoint_path)
+        print("Single model prediction for", checkpoint_path)
         use_gpu = 0 if torch.cuda.is_available() and args.gpu >= 0 else -1
         print(f"Using GPU: {use_gpu}")
         # create datamodule
@@ -48,8 +53,8 @@ def main(args):
         else:
             save_path = os.path.join(f"json_{args.datasplit}_scores", "full_data", name)
         os.makedirs(save_path, exist_ok = True)
-        test_scores_path = os.path.join(save_path, f"{out_file_name}.json")
-
+        test_scores_path = os.path.join(save_path, f"epoch_{args.epoch}_seed_{args.seed}_{out_file_name}.json")
+        print(test_scores_path)
         # with open(test_scores_path, 'w') as fp:
         # test_scores_path = os.path.join("json_test_scores", f"{out_file_name}.json")
         with open(test_scores_path, 'w') as fp:
@@ -241,58 +246,20 @@ def load_args_from_json(json_file):
     return Args(**data)
 
 if __name__ == "__main__":
-    # parser = argparse.ArgumentParser(
-    #     description="Computes predictions for a given model and dataset, "
-    #     "prints metrics, and optionally dumps predictions to a given file."
-    # )
-    # parser.add_argument(
-    #     "--models",
-    #     type=str,
-    #     nargs="+",
-    #     required=True,
-    #     help="Local checkpoint files to use",
-    # )
-    # parser.add_argument(
-    #     "--datasplit",
-    #     type=str,
-    #     choices=("train", "val", "test"),
-    #     default="val",
-    #     help="data split to use: train, val or test " "(default: %(default)s)",
-    # )
-    # parser.add_argument("--gpu", type=int, default=0)
-    # parser.add_argument(
-    #     "--num_workers", type=int, default=8, help="number of data loading workers "
-    # )
-    # parser.add_argument(
-    #     "--eval_trim_beats",
-    #     metavar="SECONDS",
-    #     type=float,
-    #     default=None,
-    #     help="Override whether to skip the first given seconds "
-    #     "per piece in evaluating (default: as stored in model)",
-    # )
-    # parser.add_argument(
-    #     "--dbn",
-    #     default=None,
-    #     action=argparse.BooleanOptionalAction,
-    #     help="override the option to use madmom postprocessing dbn",
-    # )
-    # parser.add_argument(
-    #     "--aggregation-type",
-    #     type=str,
-    #     choices=("mean-std", "k-fold"),
-    #     default="mean-std",
-    #     help="Type of aggregation to use for multiple models; ignored if only one model is given",
-    # )
+    
     args =  load_args_from_json("helpers/evaluate_params.json")
     import cProfile
     import pstats
 
     # profiler = cProfile.Profile()
     # profiler.enable()
+    args0 = deepcopy(args)
 
+    for seed in args0.seed_list:
+        args.seed = seed
+        main(args)
     # Run function
-    main(args)
+ 
 
     # profiler.disable()
     # stats = pstats.Stats(profiler).sort_stats("cumulative")

@@ -66,14 +66,14 @@ def main(args):
         # create datamodule
         datamodule = datamodule_setup(checkpoint, args, cluster_files)
         # create model and trainer
-        model, trainer = plmodel_setup(
-            checkpoint, args.eval_trim_beats, args.dbn, use_gpu
-        )
-        # predict
-        metrics, dataset, preds, piece, dict_all_results = compute_predictions(
-            model, trainer, datamodule.predict_dataloader()
-        )
-       # save predictions to a json file
+    #     model, trainer = plmodel_setup(
+    #         checkpoint, args.eval_trim_beats, args.dbn, use_gpu
+    #     )
+    #     # predict
+    #     metrics, dataset, preds, piece, dict_all_results = compute_predictions(
+    #         model, trainer, datamodule.predict_dataloader()
+    #     )
+    #    # save predictions to a json file
         out_file_name =  Path(args.models[0]).stem
         if args.name:
             name = args.name
@@ -85,27 +85,27 @@ def main(args):
             save_path = os.path.join(f"json_{args.datasplit}_scores", "full_data", name)
         os.makedirs(save_path, exist_ok = True)
         test_scores_path = os.path.join(save_path, f"{out_file_name}.json")
-
+        print(test_scores_path)
         # with open(test_scores_path, 'w') as fp:
         # test_scores_path = os.path.join("json_test_scores", f"{out_file_name}.json")
-        with open(test_scores_path, 'w') as fp:
-            json.dump(dict_all_results, fp)
-        averaged_metrics = {k: np.mean(v) for k, v in metrics.items()}
-        # compute metrics averaged by dataset
-        dataset_metrics = {
-            k: {d: np.mean(v[dataset == d]) for d in np.unique(dataset)}
-            for k, v in metrics.items()
-        }
-        # print for dataset
-        print("Metrics")
-        for k, v in averaged_metrics.items():
-            print(f"{k}: {v}")
-        print("Dataset metrics")
-        for k, v in dataset_metrics.items():
-            print(k)
-            for d, value in v.items():
-                print(f"{d}: {value}")
-            print("------")
+        # with open(test_scores_path, 'w') as fp:
+        #     json.dump(dict_all_results, fp)
+        # averaged_metrics = {k: np.mean(v) for k, v in metrics.items()}
+        # # compute metrics averaged by dataset
+        # dataset_metrics = {
+        #     k: {d: np.mean(v[dataset == d]) for d in np.unique(dataset)}
+        #     for k, v in metrics.items()
+        # }
+        # # print for dataset
+        # print("Metrics")
+        # for k, v in averaged_metrics.items():
+        #     print(f"{k}: {v}")
+        # print("Dataset metrics")
+        # for k, v in dataset_metrics.items():
+        #     print(k)
+        #     for d, value in v.items():
+        #         print(f"{d}: {value}")
+        #     print("------")
     else:  # multiple models
         if args.aggregation_type == "mean-std":
             # computing result variability for the same dataset and different model seeds

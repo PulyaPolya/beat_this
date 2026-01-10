@@ -257,7 +257,7 @@ def objective(trial, args):
             "max_parts": 9,
         }
 
-    lr_hpo =  trial.suggest_float("lr", 1e-5, 8e-3, log = True) #trial.suggest_float("lr", 1e-5, 8e-4, log = True) # 8e-6
+    lr_hpo =  trial.suggest_float("lr", 1e-5, 8e-4, log = True) #trial.suggest_float("lr", 1e-5, 8e-4, log = True) # 8e-6
     weight_decay_hpo = trial.suggest_float("weight_decay", 1e-4, 1e-1, log = True)
     batch_size_hpo =  trial.suggest_categorical ("batch_size", [ 4, 8, 16])
     hpo_config = {
@@ -271,9 +271,13 @@ def objective(trial, args):
     freeze_layers_hpo = None
         
     if args.cluster_number:
-        checkpoint_epoch_hpo = trial.suggest_categorical(
-            "checkpoint", [60, 70,"best", 80, 90, 100]
-        )
+        if args.ckpt_epoch: 
+            checkpoint_epoch_hpo = "best"
+        else:
+            checkpoint_epoch_hpo = trial.suggest_categorical(
+                "checkpoint", [60, 70,"best", 80, 90, 100]
+            )
+        print(f"using checkpoint epoch {checkpoint_epoch_hpo}")
         freeze_layers_hpo = trial.suggest_int("freeze_layers", 0, 4)
         hpo_config["checkpoint_epoch"] = checkpoint_epoch_hpo
         hpo_config["freeze_layers"] = freeze_layers_hpo
@@ -450,7 +454,7 @@ def objective(trial, args):
 def main(args):
     # don't prune first 5 trials and wait 3 epochs to prune
     # changed!!!!!
-    pruner = optuna.pruners.MedianPruner(n_warmup_steps=5, n_startup_trials = 10)
+    pruner = optuna.pruners.MedianPruner(n_warmup_steps=8, n_startup_trials = 10)
     
     if args.sampler_path:
         print(f"Loading a sampler from path {args.sampler_path}")
@@ -463,7 +467,7 @@ def main(args):
                                 direction= "maximize",
                                 sampler = sampler,
                                 pruner = pruner,
-                                storage = "sqlite:///optuna_joint.db",
+                                storage = "sqlite:///optuna_downbeat.db",
                                 load_if_exists=True )
     study.optimize(lambda trial: objective(trial, args), n_trials = args.num_trials,  callbacks=[SaveSamplerCallback(f"sampler_{args.name}.pkl")])
     with open(f"sampler_{args.name}.pkl", "wb") as fout:
