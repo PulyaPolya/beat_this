@@ -16,6 +16,7 @@ from beat_this.inference import split_predict_aggregate
 from beat_this.model.beat_tracker import BeatThis
 from beat_this.model.postprocessor import Postprocessor
 from beat_this.utils import replace_state_dict_key
+import acr_modules as acr_module
 
 
 class PLBeatThis(LightningModule):
@@ -342,7 +343,14 @@ class Metrics:
             CMLc, CMLt, AMLc, AMLt = mir_eval.beat.continuity(truth, preds)
             fmeasure = mir_eval.beat.f_measure(truth, preds)
             cemgil = mir_eval.beat.cemgil(truth, preds)
-            return {"F-measure": fmeasure, "Cemgil": cemgil, "CMLt": CMLt, "AMLt": AMLt}
+            acr_res = acr_module.anyMetLev_eval(truth,preds, tolerance = 0.07, L =2,
+                half_offbeat = True, double= True, half= True, 
+                third_offbeat = True, triple= True, third=True, 
+                quadruple = True,
+                return_dict = False, quarter = True,
+                return_cframe = True, FPS = 100)
+            acr_any =acr_res["all_ratios"]["Ratio-any"]
+            return {"F-measure": fmeasure, "Cemgil": cemgil, "CMLt": CMLt, "AMLt": AMLt, "ACR_any": acr_any}
         else:
             raise ValueError("step must be either val or test")
 

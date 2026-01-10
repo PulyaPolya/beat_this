@@ -1,0 +1,6 @@
+[submodule "acr4mls"]
+	path = acr4mls
+	url = https://github.com/SunnyCYC/acr4mls.git
+[submodule "external/beat-metrics"]
+	path = external/beat-metrics
+	url = https://github.com/SunnyCYC/acr4mls.git
