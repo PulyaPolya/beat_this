@@ -16,20 +16,35 @@ import torch
 from pathlib import Path
 from copy import deepcopy
 
+
+def load_checkpoint_resume(seed_folder, seed, epoch= None):
+    seed_folder = seed_folder.replace("_SEED_", str(seed))
+    checkpoint_type = "best" if epoch == "best" else "periodic"
+    print(checkpoint_type)
+    checkpoint_folder = os.path.join(seed_folder, checkpoint_type)
+    if checkpoint_type == "best":
+        checkpoint = [check for check in os.listdir(checkpoint_folder) if "orig" not in check ][0]
+    else:
+        epoch = epoch -1
+        checkpoint = [check for check in os.listdir(checkpoint_folder) if f"epoch={epoch}" in check and "orig" not in check ][0]
+    checkpoint_path = os.path.join(checkpoint_folder, checkpoint)
+    print(f"Loading {checkpoint_type} checkpoint for seed {seed} from folder {seed_folder}  from the path {checkpoint_path}")
+    #checkpoint_name = Path(checkpoint_path).stem
+    #kpt = torch.load(checkpoint_path, map_location="cpu")
+    #print(ckpt)
+    
+    return checkpoint_path
 # for repeatability
 seed_everything(0, workers=True)
 
 
 def main(args):
     if len(args.models) == 1:
-       
         # single model prediction
-        checkpoint_folder = args.models[0]
-        checkpoint_folder = checkpoint_folder.replace("_SEED_", str(args.seed))
-        checkpoint = [check for check in os.listdir(checkpoint_folder) if f"epoch={args.epoch-1}" in check][0]
-        checkpoint_path = os.path.join(checkpoint_folder, checkpoint)
+        checkpoint_path = load_checkpoint_resume(seed_folder = args.models[0], seed = args.seed, epoch = args.epoch)
         checkpoint = load_checkpoint(checkpoint_path)
         print("Single model prediction for", checkpoint_path)
+        
         use_gpu = 0 if torch.cuda.is_available() and args.gpu >= 0 else -1
         print(f"Using GPU: {use_gpu}")
         # create datamodule
@@ -50,13 +65,13 @@ def main(args):
             name = ""
         if args.clustering_config is not None and args.cluster_number is not None:
             save_path = os.path.join(f"json_{args.datasplit}_scores", args.clustering_config, f"cluster_{args.cluster_number}", name)
+        elif args.all_metrics ==True:
+            save_path = os.path.join(f"json_{args.datasplit}_scores", "all_data_metrics", name)
         else:
             save_path = os.path.join(f"json_{args.datasplit}_scores", "full_data", name)
         os.makedirs(save_path, exist_ok = True)
         test_scores_path = os.path.join(save_path, f"epoch_{args.epoch}_seed_{args.seed}_{out_file_name}.json")
         print(test_scores_path)
-        # with open(test_scores_path, 'w') as fp:
-        # test_scores_path = os.path.join("json_test_scores", f"{out_file_name}.json")
         with open(test_scores_path, 'w') as fp:
             json.dump(dict_all_results, fp)
         averaged_metrics = {k: np.mean(v) for k, v in metrics.items()}
