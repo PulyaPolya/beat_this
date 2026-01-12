@@ -343,14 +343,31 @@ class Metrics:
             CMLc, CMLt, AMLc, AMLt = mir_eval.beat.continuity(truth, preds)
             fmeasure = mir_eval.beat.f_measure(truth, preds)
             cemgil = mir_eval.beat.cemgil(truth, preds)
-            acr_res = acr_module.anyMetLev_eval(truth,preds, tolerance = 0.07, L =2,
-                half_offbeat = True, double= True, half= True, 
-                third_offbeat = True, triple= True, third=True, 
-                quadruple = True,
-                return_dict = False, quarter = True,
-                return_cframe = True, FPS = 100)
-            acr_any =acr_res["all_ratios"]["Ratio-any"]
-            return {"F-measure": fmeasure, "Cemgil": cemgil, "CMLt": CMLt, "AMLt": AMLt, "ACR_any": acr_any}
+            metrics = {
+                "F-measure": fmeasure,
+                "Cemgil": cemgil,
+                "CMLt": CMLt,
+                "AMLt": AMLt,
+            }
+
+            for L in (2, 3, 4):
+                acr_res = acr_module.anyMetLev_eval(
+                    truth, preds,
+                    tolerance=0.07,
+                    L=L,
+                    half_offbeat=True, double=True, half=True,
+                    third_offbeat=True, triple=True, third=True,
+                    quadruple=True, quarter=True,
+                    return_dict=False,
+                    return_cframe=True,
+                    FPS=50,
+                )
+
+                for k, v in acr_res["all_ratios"].items():
+                    # e.g. ACR_L2_onbeat, ACR_L3_any, ...
+                    metrics[f"ACR_L{L}_{k.replace('Ratio-', '')}"] = v
+
+            return metrics
         else:
             raise ValueError("step must be either val or test")
 
