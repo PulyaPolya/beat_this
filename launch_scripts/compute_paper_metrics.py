@@ -20,7 +20,7 @@ from copy import deepcopy
 def load_checkpoint_resume(seed_folder, seed, epoch= None):
     seed_folder = seed_folder.replace("_SEED_", str(seed))
     checkpoint_type = "best" if epoch == "best" else "periodic"
-    print(checkpoint_type)
+    #print(checkpoint_type)
     checkpoint_folder = os.path.join(seed_folder, checkpoint_type)
     if checkpoint_type == "best":
         checkpoint = [check for check in os.listdir(checkpoint_folder) if "orig" not in check ][0]
@@ -44,52 +44,59 @@ def main(args):
         checkpoint_path = load_checkpoint_resume(seed_folder = args.models[0], seed = args.seed, epoch = args.epoch)
         checkpoint = load_checkpoint(checkpoint_path)
         print("Single model prediction for", checkpoint_path)
-        
-        use_gpu = 0 if torch.cuda.is_available() and args.gpu >= 0 else -1
-        print(f"Using GPU: {use_gpu}")
-        # create datamodule
-        datamodule = datamodule_setup(checkpoint, args)
-        # create model and trainer
-        model, trainer = plmodel_setup(
-            checkpoint, args.eval_trim_beats, args.dbn, use_gpu
-        )
-        # predict
-        metrics, dataset, preds, piece, dict_all_results = compute_predictions(
-            model, trainer, datamodule.predict_dataloader()
-        )
+        if not args.debug:
+            use_gpu = 0 if torch.cuda.is_available() and args.gpu >= 0 else -1
+            print(f"Using GPU: {use_gpu}")
+            # create datamodule
+            datamodule = datamodule_setup(checkpoint, args)
+            # create model and trainer
+            model, trainer = plmodel_setup(
+                checkpoint, args.eval_trim_beats, args.dbn, use_gpu
+            )
+            # predict
+            metrics, dataset, preds, piece, dict_all_results = compute_predictions(
+                model, trainer, datamodule.predict_dataloader()
+            )
        # save predictions to a json file
         out_file_name =  Path(args.models[0]).stem
+        subfolder = args.subfolder if args.subfolder is not None else ""
         if args.name:
             name = args.name
         else:
             name = ""
         if args.clustering_config is not None and args.cluster_number is not None:
             save_path = os.path.join(f"json_{args.datasplit}_scores", args.clustering_config, f"cluster_{args.cluster_number}", name)
-        elif args.all_metrics ==True:
-            save_path = os.path.join(f"json_{args.datasplit}_scores", "all_data_metrics", name)
         else:
-            save_path = os.path.join(f"json_{args.datasplit}_scores", "full_data", name)
+            dir = "all_data_metrics" if args.all_metrics ==True else "full_data"
+            cluster= str(args.cluster_number) if args.cluster_number is not None else ""
+            save_path = os.path.join(f"json_{args.datasplit}_scores", dir, subfolder, cluster, name)
+
+        # elif args.all_metrics ==True:
+        #     save_path = os.path.join(f"json_{args.datasplit}_scores", "all_data_metrics", name)
+        # else:
+        #     save_path = os.path.join(f"json_{args.datasplit}_scores", "full_data", name)
         os.makedirs(save_path, exist_ok = True)
         test_scores_path = os.path.join(save_path, f"epoch_{args.epoch}_seed_{args.seed}_{out_file_name}.json")
         print(test_scores_path)
-        with open(test_scores_path, 'w') as fp:
-            json.dump(dict_all_results, fp)
-        averaged_metrics = {k: np.mean(v) for k, v in metrics.items()}
-        # compute metrics averaged by dataset
-        dataset_metrics = {
-            k: {d: np.mean(v[dataset == d]) for d in np.unique(dataset)}
-            for k, v in metrics.items()
-        }
-        # print for dataset
-        print("Metrics")
-        for k, v in averaged_metrics.items():
-            print(f"{k}: {v}")
-        print("Dataset metrics")
-        for k, v in dataset_metrics.items():
-            print(k)
-            for d, value in v.items():
-                print(f"{d}: {value}")
-            print("------")
+        if not args.debug:
+            with open(test_scores_path, 'w') as fp:
+                json.dump(dict_all_results, fp)
+            averaged_metrics = {k: np.mean(v) for k, v in metrics.items()}
+            # compute metrics averaged by dataset
+            dataset_metrics = {
+                k: {d: np.mean(v[dataset == d]) for d in np.unique(dataset)}
+                for k, v in metrics.items()
+            }
+            # print for dataset
+            print("Metrics")
+            for k, v in averaged_metrics.items():
+                print(f"{k}: {v}")
+            print("Dataset metrics")
+            for k, v in dataset_metrics.items():
+                print(k)
+                for d, value in v.items():
+                    print(f"{d}: {value}")
+                print("------")
     else:  # multiple models
         if args.aggregation_type == "mean-std":
             # computing result variability for the same dataset and different model seeds
@@ -192,6 +199,8 @@ def datamodule_setup(checkpoint, args):
         datamodule_hparams["num_workers"] = args.num_workers
     datamodule_hparams["predict_datasplit"] = args.datasplit
     datamodule_hparams["data_dir"] = data_dir
+    datamodule_hparams["files"] = None
+    #print(datamodule_hparams)
     datamodule = BeatDataModule(**datamodule_hparams)
     datamodule.setup(stage="predict")
     return datamodule
