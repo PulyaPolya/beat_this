@@ -32,9 +32,6 @@ def set_seed(seed=42):
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
-    # # For full reproducibility
-    # torch.backends.cudnn.deterministic = True
-    # torch.backends.cudnn.benchmark = False
 class OptunaPruningCallbackWrapper(Callback):
     """Wrapper to ensure Optuna callback is properly recognized by Lightning"""
     def __init__(self, trial, monitor):
@@ -43,10 +40,8 @@ class OptunaPruningCallbackWrapper(Callback):
         self.pruning_callback = PyTorchLightningPruningCallback(trial, monitor)
     
     def on_validation_end(self, trainer, pl_module):
-        # DEBUG: Print available metrics
         self.pruning_callback.on_validation_end(trainer, pl_module)
         print(f"\n=== Validation End (Epoch {trainer.current_epoch}) ===")
-        #print(f"Available metrics: {list(trainer.callback_metrics.keys())}")
         if self.monitor in trainer.callback_metrics:
             metric_value = trainer.callback_metrics[self.monitor].item()
             print(f"Monitor metric '{self.monitor}' = {metric_value}")
@@ -118,16 +113,13 @@ class Config:
     transformer_dim: int = 512
     frontend_dropout: float = 0.1
     transformer_dropout: float = 0.2
-    #lr: float = 8e-4
-    #weight_decay: float = 0.01
     logger: str = "none"  # or "wandb"
     num_workers: int = 8
     n_heads: int = 16
     fps: int = 50
-    loss: str = "shift_tolerant_weighted_bce"  # one of: shift_tolerant_weighted_bce, fast_shift_tolerant_weighted_bce, weighted_bce, bce
+    loss: str = "shift_tolerant_weighted_bce" 
     warmup_steps: int = 1000
     max_epochs: int = 100
-    #batch_size: int = 8
     accumulate_grad_batches: int = 8
     train_length: int = 1500
     dbn: bool = False
@@ -156,7 +148,6 @@ class Config:
     es_patience: int = 10                    
     es_min_delta: float = 0.001   
     compute_metrics: bool =  False
-    #full_data : bool = False
     cluster_number : Optional[int]  = 0
     clustering_config: Optional[str] = None
     num_trials : int = 1
@@ -192,7 +183,7 @@ def load_checkpoint_hpo (checkpoint_epoch, seed_folder):
 def rename_key(key: str, insert: str) -> str:
     parts = key.split(".")
     if len(parts) > 2:
-        parts.insert(2, insert)   # insert after the 2nd dot
+        parts.insert(2, insert)   
     return ".".join(parts) 
 
 def rename_best_checkpoint(best_ckpt_path,  key_fragment="_orig_mod", save = True):
@@ -246,7 +237,6 @@ def objective(trial, args):
     if args.pitch_augmentation:
         augmentations["pitch"] = {"min": -5, "max": 6}
     if args.mask_augmentation:
-        # kind, min_count, max_count, min_len, max_len, min_parts, max_parts
         augmentations["mask"] = {
             "kind": "permute",
             "min_count": 1,
@@ -257,7 +247,7 @@ def objective(trial, args):
             "max_parts": 9,
         }
 
-    lr_hpo =  trial.suggest_float("lr", 1e-5, 8e-4, log = True) #trial.suggest_float("lr", 1e-5, 8e-4, log = True) # 8e-6
+    lr_hpo =  trial.suggest_float("lr", 1e-5, 8e-3, log = True) 
     weight_decay_hpo = trial.suggest_float("weight_decay", 1e-4, 1e-1, log = True)
     batch_size_hpo =  trial.suggest_categorical ("batch_size", [ 4, 8, 16])
     hpo_config = {
@@ -302,11 +292,8 @@ def objective(trial, args):
     print("Starting a new run with the following parameters:")
     print(args)
 
-    #params_str = f"{'noval ' if not args.val else ''}{'hung ' if args.hung_data else ''}{'fold' + str(args.fold) + ' ' if args.fold is not None else ''}{args.loss}-h{args.transformer_dim}-aug{args.tempo_augmentation}{args.pitch_augmentation}{args.mask_augmentation}{' nosumH ' if not args.sum_head else ''}{' nopartialT ' if not args.partial_transformers else ''}"
     if args.logger == "wandb":
         wandb_logger_kwargs = {}
-        # if args.resume_checkpoint and args.resume_id:
-        #     wandb_logger_kwargs = dict(id=args.resume_id, resume="must")
 
         name = f"trial_{trial.number}"
         if args.cluster_number:
@@ -397,8 +384,6 @@ def objective(trial, args):
     if args.cluster_number:
         # if optuna chose to fine-tune
         if checkpoint_epoch_hpo != 0:
-        #if args.ckpt_epoch:
-        #ckpt = torch.load(args.resume_checkpoint, map_location="cpu")
         
             param_name = "model.frontend.stem.bn1d.weight" 
             before = pl_model.state_dict()[param_name].clone()
@@ -429,32 +414,27 @@ def objective(trial, args):
                             "epoch": ep,
                             f"{metric}_baseline": baseline_f,
                         },
-                        step=ep,  # aligns with epoch if you use epoch as x-axis in W&B
+                        step=ep, 
                     )
-    params = trial.params  # contains all current params *after suggestion*
+    params = trial.params  # contains all current params
     print(f"\n=== Trial {trial.number} ===")
     print("Parameters:", params)
     
     try:
         trainer.fit(pl_model, datamodule)
-        #pruning_callback.check_pruned()
         val_results = trainer.validate(pl_model, datamodule=datamodule)
-        # if logger is not None:
-        #     logger.experiment.finish()
         print(f"{metric}result f score is {val_results[0][metric]}")
         return val_results[0][metric]
     except optuna.TrialPruned:
         print(f"Trial {trial.number} was pruned")
         raise
     finally:
-        # This ALWAYS runs: success, fail, or pruned
         if logger is not None:
             # for WandbLogger
             logger.experiment.finish()
 def main(args):
     # don't prune first 5 trials and wait 3 epochs to prune
-    # changed!!!!!
-    pruner = optuna.pruners.MedianPruner(n_warmup_steps=3, n_startup_trials = 5) #n_warmup_steps=8, n_startup_trials = 10
+    pruner = optuna.pruners.MedianPruner(n_warmup_steps=3, n_startup_trials = 5) 
     
     if args.sampler_path:
         print(f"Loading a sampler from path {args.sampler_path}")
@@ -475,6 +455,5 @@ def main(args):
 
 if __name__ == "__main__":
     cfg =load_config("launch_scripts/optuna_train_params_full.yaml")
-   # args = parser.parse_args()
 
     main(cfg)

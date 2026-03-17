@@ -4,7 +4,6 @@ import math
 import torch
 from pytorch_lightning import Trainer, seed_everything
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint, Callback, EarlyStopping
-#from lightning.pytorch.callbacks import ModelSummary
 from pytorch_lightning.loggers import WandbLogger
 from collections import OrderedDict
 from torchinfo import summary
@@ -34,10 +33,6 @@ def set_seed(seed=42):
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
-
-    # # For full reproducibility
-    # torch.backends.cudnn.deterministic = True
-    # torch.backends.cudnn.benchmark = False
 
 def freeze_by_prefix(module: nn.Module, prefixes):
     if isinstance(prefixes, str):
@@ -73,65 +68,6 @@ def freeze_layers(num_to_freeze, pl_model):
 
     set_bn_eval_by_prefix(pl_model, layers_to_freeze)
 
-    #return pl_model
-class PlateauUnfreeze(Callback):
-    def __init__(self, monitor="val_f1", mode="max", patience=1,  lr_backbone=1e-5):
-        super().__init__()
-        self.monitor = monitor
-        self.mode = mode
-        self.patience = patience
-        #self.get_blocks_fn = get_blocks_fn
-        self.lr_backbone = lr_backbone
-        self.best = -float("inf") if mode=="max" else float("inf")
-        self.bad_epochs = 0
-        self._num_unfrozen = 0
-        self._layers = None
-
-    def on_fit_start(self, trainer, pl_module):
-        # Discover your exact stack once:
-        # model.transformer_blocks._orig_mod.layers is a ModuleList
-        self._layers = list(pl_module.model.transformer_blocks._orig_mod.layers)
-        self._report_trainable(pl_module, prefix=" (start)")
-    
-    def _report_trainable(self, pl_module, prefix=""):
-        total = sum(p.numel() for p in pl_module.parameters())
-        trainable = sum(p.numel() for p in pl_module.parameters() if p.requires_grad)
-        print(f"[PlateauUnfreeze]{prefix} Trainable: {trainable:,} / {total:,} ({100*trainable/total:.2f}%)")
-
-    def on_validation_end(self, trainer, pl_module):
-        metrics = trainer.callback_metrics
-        if self.monitor not in metrics:
-            return
-        current = metrics[self.monitor].item()
-
-        improved = (current > self.best) if self.mode=="max" else (current < self.best)
-        if improved:
-            self.best = current
-            self.bad_epochs = 0
-            return
-
-        self.bad_epochs += 1
-        if self.bad_epochs < self.patience:
-            return
-        #print("unfreezing new layers")
-        # Unfreeze next block
-        unfrozen = sum(any(p.requires_grad for p in L.parameters()) for L in self._layers)
-        next_idx = len(self._layers) - 1 - unfrozen
-        if next_idx < 0:
-            return  # nothing left to unfreeze
-        
-        prefix = f"model.transformer_blocks._orig_mod.layers.{next_idx}."
-        new_params = unfreeze_by_prefix(pl_module, prefix)
-        # if new_params:
-        #     trainer.optimizers[0].add_param_group({"params": new_params, "lr": self.lr_backbone})
-        self._num_unfrozen += 1
-        self.bad_epochs = 0
-        self._report_trainable(pl_module, prefix=f" (after unfreezing layer {next_idx})")
-        # trainer.logger.log_metrics({"unfrozen_blocks": self._num_unfrozen}, step=trainer.global_step)
-
-        # lr =trainer.optimizers[0].param_groups[0]["lr"]
-        # trainer.logger.log_metrics({"lr": lr}, step=trainer.global_step)
-
 class DelayedCheckpoint(ModelCheckpoint):
     def __init__(self, start_epoch: int = 70, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -153,11 +89,11 @@ class Config:
     transformer_dropout: float = 0.2
     lr: float = 8e-4
     weight_decay: float = 0.01
-    logger: str = "none"  # or "wandb"
+    logger: str = "none" 
     num_workers: int = 8
     n_heads: int = 16
     fps: int = 50
-    loss: str = "shift_tolerant_weighted_bce"  # one of: shift_tolerant_weighted_bce, fast_shift_tolerant_weighted_bce, weighted_bce, bce
+    loss: str = "shift_tolerant_weighted_bce"  
     warmup_steps: int = 1000
     max_epochs: int = 100
     batch_size: int = 8
@@ -183,8 +119,8 @@ class Config:
     resume_checkpoint: bool = False
     resume_id :  Optional[str] = None
     # when none take the best checkpoint for this seed, else take the periodic checkpoint at this epoch
-    ckpt_epoch : Optional[int] = None  # 
-    ## only used for continuing training
+    ckpt_epoch : Optional[int] = None  
+    # only used for continuing training
     checkpoints_folder: Optional[str] = None
     freeze_layers: Optional[int] = None
     # for the full-data model, to save intermediate checkpoints
@@ -194,7 +130,6 @@ class Config:
     es_patience: int = 10                    
     es_min_delta: float = 0.001   
     compute_metrics: bool =  False
-    #full_data : bool = False
     # parameters that define clsutering configuration
     cluster_number : Optional[int]  = None
     clustering_config: Optional[str] = None
@@ -261,8 +196,6 @@ def compute_metrics(model, trainer, checkpoint_name, data_dir, save_predictions 
         subfolder = name if name else "" 
         if cluster_info:
             save_path = os.path.join(f"json_{datasplit}_scores", cluster_info[0],cluster_info[1], subfolder)
-            # os.makedirs(save_path, exist_ok = True)
-            # test_scores_path = os.path.join(save_path, f"{out_file_name}.json")
         else:
             save_path = os.path.join(f"json_{datasplit}_scores", subfolder)
         os.makedirs(save_path, exist_ok=True)
@@ -332,7 +265,7 @@ def set_trial_params(cfg, base_name):
 def rename_key(key: str, insert: str) -> str:
     parts = key.split(".")
     if len(parts) > 2:
-        parts.insert(2, insert)   # insert after the 2nd dot
+        parts.insert(2, insert)   
     return ".".join(parts) 
 
 def rename_best_checkpoint(best_ckpt_path,  key_fragment="_orig_mod", save = True):
@@ -364,10 +297,8 @@ def main(args):
     params_str = f"{'noval ' if not args.val else ''}{'hung ' if args.hung_data else ''}{'fold' + str(args.fold) + ' ' if args.fold is not None else ''}{args.loss}-h{args.transformer_dim}-aug{args.tempo_augmentation}{args.pitch_augmentation}{args.mask_augmentation}{' nosumH ' if not args.sum_head else ''}{' nopartialT ' if not args.partial_transformers else ''}"
     if args.logger == "wandb":
         if args.resume_checkpoint:
-            #wandb_args = dict(id=args.resume_id, resume="must")
             group = args.clustering_config
         else:
-            #wandb_args = {}
             group = None
         logger = WandbLogger(
             project="beat_this", name=args.name, group = group, config = vars(args)
@@ -381,9 +312,7 @@ def main(args):
         torch.backends.cuda.enable_mem_efficient_sdp(False)
         torch.backends.cuda.enable_math_sdp(False)
     if args.cluster_number:
-        print(f"Using data from cluster number {args.cluster_number}")
-        #data_dir =Path(os.path.join(args.data_path, args.clustering_config, f"cluster_{args.cluster_number}")) / "data" #Path(__file__).parent.parent.relative_to(Path.cwd()) / "data"
-        #if args.cluster_files_df:
+        print(f"Using data from cluster number {args.cluster_number}"):
         df = pd.read_csv(args.cluster_files_df)
         df_filtered = df[df["label"].str.contains(str(args.cluster_number))]
         cluster_files = list(df_filtered ["file"].values)
@@ -391,19 +320,15 @@ def main(args):
     else:
         cluster_files = None
         
-    #else:
     data_dir =Path(args.data_path) / "data" 
     print(data_dir)
-    
-    #checkpoint_dir = Path(args.checkpoint_path) 
-    #(Path(__file__).parent.parent.relative_to(Path.cwd()) / "checkpoints")
+
     augmentations = {}
     if args.tempo_augmentation:
         augmentations["tempo"] = {"min": -20, "max": 20, "stride": 4}
     if args.pitch_augmentation:
         augmentations["pitch"] = {"min": -5, "max": 6}
     if args.mask_augmentation:
-        # kind, min_count, max_count, min_len, max_len, min_parts, max_parts
         augmentations["mask"] = {
             "kind": "permute",
             "min_count": 1,
@@ -458,8 +383,6 @@ def main(args):
         sum_head=args.sum_head,
         partial_transformers=args.partial_transformers
     )
-    #print(ModelSummary(model=pl_model, max_depth=2)) 
-    #print(summary(pl_model))
     for part in args.compile:
         if hasattr(pl_model.model, part):
             setattr(pl_model.model, part, torch.compile(getattr(pl_model.model, part)))
@@ -468,11 +391,9 @@ def main(args):
             raise ValueError("The model is missing the part", part, "to compile")
 
     callbacks = [LearningRateMonitor(logging_interval="step")]
-    # save every 5 epochs
     if not args.cluster_number: #args.full_data:
         checkpoint_folder = os.path.join(args.checkpoint_path, f"{args.name}S{seed}{params_str}".strip() )
     else:
-        #data_path_parts = args.data_path.split(os.sep)
         cluster_info = [args.clustering_config, str(args.cluster_number)]
         checkpoint_folder = os.path.join(args.checkpoint_path,cluster_info[0], cluster_info[1], f"{args.name}S{seed}{params_str}".strip() )
 
@@ -485,7 +406,7 @@ def main(args):
             filename="{epoch:02d}-valf{val_F-measure_beat:.4f}",
             save_top_k=-1,
             monitor=None,
-            every_n_epochs=args.save_frequency,   # 10
+            every_n_epochs=args.save_frequency,   
         )
         callbacks.append(periodic_ckpt_cb)
     best_ckpt_cb = ModelCheckpoint(
@@ -494,7 +415,7 @@ def main(args):
         monitor=monitor,
         mode="max",
         save_top_k=1,                   # keep only the best
-        save_last=False,                # optional; can set True if desired
+        save_last=False,               
     )
     callbacks.append(best_ckpt_cb)
     if args.use_early_stopping:
@@ -522,7 +443,6 @@ def main(args):
     )
     if args.resume_checkpoint:
 
-        #ckpt = torch.load(args.resume_checkpoint, map_location="cpu")
         
         param_name = "model.frontend.stem.bn1d.weight" 
         before = pl_model.state_dict()[param_name].clone()
@@ -541,8 +461,8 @@ def main(args):
             print(f"Freezing first {args.freeze_layers} layers.")
             print(f"Trainable: {trainable:,} / {total:,}")
     
-        # print(f"validating the model before")    # uncomment  for real runs!!!!
-        # trainer.validate(pl_model, datamodule=datamodule )
+        print(f"validating the model before")   
+        trainer.validate(pl_model, datamodule=datamodule )
     trainer.fit(pl_model, datamodule)
     best_path = best_ckpt_cb.best_model_path 
     print("Best checkpoint:", best_path)
@@ -553,8 +473,6 @@ def main(args):
     cluster_info = None if not args.cluster_number else cluster_info
     compute_metrics(pl_model, trainer, checkpoint_name = new_best_path, data_dir = data_dir, save_predictions = True, cluster_info = cluster_info, datasplit = "val",
                      num_workers=args.num_workers, name=args.name)
-    #compute_metrics(pl_model, trainer, datamodule, checkpoint_name = new_best_path, save_predictions= True, cluster_info= cluster_info, setup="val")
-    #trainer.test(pl_model, datamodule, ckpt_path =new_best_path)
     if args.compute_metrics:
         compute_metrics(pl_model, trainer, checkpoint_name = new_best_path, data_dir = data_dir,  save_predictions= True, cluster_info= cluster_info, datasplit="test",
                         num_workers=args.num_workers, name=args.name)
@@ -566,7 +484,7 @@ def main(args):
 if __name__ == "__main__":
     cfg0 =load_config("launch_scripts/train_params.yaml")
     cfg = deepcopy(cfg0)
-   # args = parser.parse_args()
+    # running 3 best trials
     if cfg0.run_optuna_best :
         base_name = cfg0.name
         for i in range(3):
@@ -577,9 +495,9 @@ if __name__ == "__main__":
             gc.collect()
             torch.cuda.empty_cache()
     else:
-        
+        base_name = cfg0.name
         if cfg0.trial_number:
-            cfg = set_trial_params(cfg)
+            cfg = set_trial_params(cfg, base_name)
         for seed in cfg0.seed_list:
             cfg.seed = seed
             main(cfg)

@@ -351,21 +351,24 @@ class Metrics:
             }
 
             for L in (2, 3, 4):
-                acr_res = acr_module.anyMetLev_eval(
-                    truth, preds,
-                    tolerance=0.07,
-                    L=L,
-                    half_offbeat=True, double=True, half=True,
-                    third_offbeat=True, triple=True, third=True,
-                    quadruple=True, quarter=True,
-                    return_dict=False,
-                    return_cframe=True,
-                    FPS=50,
-                )
+                try:
+                    acr_res = acr_module.anyMetLev_eval(
+                        truth, preds,
+                        tolerance=0.07,
+                        L=L,
+                        half_offbeat=True, double=True, half=True,
+                        third_offbeat=True, triple=True, third=True,
+                        quadruple=True, quarter=True,
+                        return_dict=False,
+                        return_cframe=True,
+                        FPS=50,
+                    )
 
-                for k, v in acr_res["all_ratios"].items():
-                    # e.g. ACR_L2_onbeat, ACR_L3_any, ...
-                    metrics[f"ACR_L{L}_{k.replace('Ratio-', '')}"] = v
+                    for k, v in acr_res["all_ratios"].items():
+                        metrics[f"ACR_L{L}_{k.replace('Ratio-', '')}"] = v
+                except Exception as e:
+                    print(f"problem with L0 {L}")
+                    print(e)
 
             return metrics
         else:
