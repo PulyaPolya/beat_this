@@ -29,9 +29,7 @@ def load_checkpoint_resume(seed_folder, seed, epoch= None):
         checkpoint = [check for check in os.listdir(checkpoint_folder) if f"epoch={epoch}" in check and "orig" not in check ][0]
     checkpoint_path = os.path.join(checkpoint_folder, checkpoint)
     print(f"Loading {checkpoint_type} checkpoint for seed {seed} from folder {seed_folder}  from the path {checkpoint_path}")
-    #checkpoint_name = Path(checkpoint_path).stem
-    #kpt = torch.load(checkpoint_path, map_location="cpu")
-    #print(ckpt)
+
     
     return checkpoint_path
 # for repeatability
@@ -71,10 +69,6 @@ def main(args):
             cluster= str(args.cluster_number) if args.cluster_number is not None else ""
             save_path = os.path.join(f"json_{args.datasplit}_scores", dir, subfolder, cluster, name)
 
-        # elif args.all_metrics ==True:
-        #     save_path = os.path.join(f"json_{args.datasplit}_scores", "all_data_metrics", name)
-        # else:
-        #     save_path = os.path.join(f"json_{args.datasplit}_scores", "full_data", name)
         os.makedirs(save_path, exist_ok = True)
         test_scores_path = os.path.join(save_path, f"epoch_{args.epoch}_seed_{args.seed}_{out_file_name}.json")
         print(test_scores_path)
@@ -192,7 +186,7 @@ def datamodule_setup(checkpoint, args):
         data_path = Path(args.data_path) / args.clustering_config / f"cluster_{args.cluster_number}"
     else:
         data_path = Path(args.data_path)
-    data_dir = data_path / "data" #Path(__file__).parent.parent.relative_to(Path.cwd()) / "data"
+    data_dir = data_path / "data" 
     datamodule_hparams = checkpoint["datamodule_hyper_parameters"]
     # update the hparams with the ones from the arguments
     if args.num_workers is not None:
@@ -200,7 +194,6 @@ def datamodule_setup(checkpoint, args):
     datamodule_hparams["predict_datasplit"] = args.datasplit
     datamodule_hparams["data_dir"] = data_dir
     datamodule_hparams["files"] = None
-    #print(datamodule_hparams)
     datamodule = BeatDataModule(**datamodule_hparams)
     datamodule.setup(stage="predict")
     return datamodule
@@ -272,19 +265,11 @@ def load_args_from_json(json_file):
 if __name__ == "__main__":
     
     args =  load_args_from_json("helpers/evaluate_params.json")
-    import cProfile
-    import pstats
 
-    # profiler = cProfile.Profile()
-    # profiler.enable()
     args0 = deepcopy(args)
 
     for seed in args0.seed_list:
         args.seed = seed
         main(args)
-    # Run function
- 
 
-    # profiler.disable()
-    # stats = pstats.Stats(profiler).sort_stats("cumulative")
-    # stats.print_stats(50)
+

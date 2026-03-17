@@ -20,8 +20,7 @@ from beat_this.preprocessing import LogMelSpect, load_audio
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 
-#BASEPATH = Path(__file__).parent.parent.relative_to(Path.cwd())
-BASEPATH = Path(r"P:\datasets\geenres\fma\fma_small\fma_small")
+BASEPATH = Path(__file__).parent.parent.relative_to(Path.cwd())
 
 def save_audio(path, waveform, samplerate, resample_from=None):
     if resample_from and resample_from != samplerate:
@@ -194,14 +193,14 @@ class AudioPreprocessing(object):
         self.audio_dirs = {
             row[0]: row[1] for row in pd.read_csv(orig_audio_paths, header=None).values
         }
-        # # check if annotations exists, otherwise tell how to obtain them
-        # if not self.annotation_dir.exists():
-        #     raise RuntimeError(
-        #         f"{self.annotation_dir} missing, check instructions "
-        #         "in README.md how to obtain the annotations."
-        #     )
+        # check if annotations exists, otherwise tell how to obtain them
+        if not self.annotation_dir.exists():
+            raise RuntimeError(
+                f"{self.annotation_dir} missing, check instructions "
+                "in README.md how to obtain the annotations."
+            )
 
-        #print(f"Annotations ready in {self.annotation_dir}")
+        print(f"Annotations ready in {self.annotation_dir}")
 
         self.out_sr = out_sr
         self.aug_sr = aug_sr
@@ -224,7 +223,6 @@ class AudioPreprocessing(object):
         with concurrent.futures.ThreadPoolExecutor() as executor:
             futures = []
             for dataset_name, audio_dir in self.audio_dirs.items():
-                #audio_dir = 'C:\\Polina\\master\\thesis\\beat_this\\data\\gtzan_old\\audio'
                 for audio_path in Path(audio_dir).iterdir():
                     if audio_path.stem[:12] in ("gtzan_speech", "gtzan_music_"):
                         continue
@@ -241,14 +239,14 @@ class AudioPreprocessing(object):
         print("Processed", processed, "audio files")
 
     def process_audio_file(self, dataset_name, audio_path):
-        # annotation_dir = Path(self.annotation_dir, dataset_name, "annotations")
-        # # load annotations
-        # beat_path = Path(annotation_dir, "beats", audio_path.stem + ".beats")
-        # if not beat_path.exists():
-        #     print(
-        #         f"beat annotation {beat_path} not found for {audio_path}",
-        #     )
-        #     return False
+        annotation_dir = Path(self.annotation_dir, dataset_name, "annotations")
+        # load annotations
+        beat_path = Path(annotation_dir, "beats", audio_path.stem + ".beats")
+        if not beat_path.exists():
+            print(
+                f"beat annotation {beat_path} not found for {audio_path}",
+            )
+            return False
         # create a folder with the name of the track
         folder_path = Path(self.audio_dir, "mono_tracks", dataset_name, audio_path.stem)
         # derive the name of the unaugmented file
@@ -461,7 +459,6 @@ def main(orig_audio_paths, pitch_shift, time_stretch, noise, verbose):
         noise = noise,
         verbose=verbose,
     )
-   # sc.spectrograms_dir = Path("C:\\Polina\\master\\thesis\\beat_this\\data\\gtzan_old\\audio\\spectrograms")
     sc.create_spects()
 
     # assemble into NPZ files
